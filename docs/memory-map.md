@@ -2,12 +2,18 @@
 
 本文件记录 `ws63-qemu` 机器模型所依据的 WS63 SoC 地址布局。**真值来源**：
 
-- 内存区域（RAM/Flash/TCM）：`ws63-rs/ws63-rt/memory.x` + `layout.ld`
-  ——这是固件实际链接所用的地址（Rust 运行时视角）。
+- 内存区域（RAM/Flash/TCM）：`ws63-rs/ws63-rt/memory.x`，它是 fbb_ws63 C SDK 板级内存配置
+  `src/drivers/boards/ws63/evb/memory_config/include/memory_config_common.h` 的忠实转写。
 - 外设基址：`ws63-rs/ws63-svd/WS63.svd`（各 `<peripheral>` 的 `baseAddress`）。
 
-> ⚠️ 注意：fbb_ws63 C SDK 的 `platform_core.h` 使用了**另一套**（较旧/不同）地址布局
-> （如 ITCM 在 0x80000）。`ws63-qemu` 以 `memory.x` 为准，因为它才是 ws63-rs 固件链接的地址。
+> ✅ **与 C SDK 一致**：上表地址逐项匹配 `memory_config_common.h`——
+> `BOOTROM_START=0x100000`、`ROM_START=0x109000`、`APP_ITCM_ORIGIN=0x14C000`、
+> `APP_DTCM_ORIGIN=0x180000`、`APP_SRAM_ORIGIN=0xA00000`、`FLASH_START=0x200000`、
+> `APP_PROGRAM_ORIGIN=0x230000+0x300=0x230300`。memory.x 与 C SDK **不冲突**。
+>
+> 易混淆点：`platform_core.h` 里的 `MPU_ITCM_ADDR_BASE=0x80000`、`MPU_L2RAM_ADDR0_BASE=0x100000`
+> 是 **MPU 保护区窗口**（供内存保护单元用的粗粒度地址范围），**不是**代码/数据的实际链接地址，
+> 是另一层概念。应用固件的真实放置以 `memory_config_common.h` / `memory.x` 为准。
 
 ## 内存区域（machine 建模）
 
@@ -63,5 +69,6 @@
 ## CPU
 
 - 真实芯片：**RV32IMFC_Zicsr**（硬件单精度浮点 `ilp32f`，**无原子扩展 A**），240 MHz，单 hart。
-- QEMU 默认用 `sifive-e34` 核（rv32imafc）——是 rv32imfc 的超集；固件由工具链保证不发原子指令，
-  故多出的 `A` 无副作用。复位 PC = ELF entry（`0x0023_0300`），无 OpenSBI / 无 FDT（裸机）。
+- QEMU 用可配置的 `rv32` 基础核，**精确设为 I/M/F/C，关闭 A、D、zawrs**——与 WS63 ISA 完全一致
+  （非超集）。复位 PC = ELF entry（`0x0023_0300`），无 OpenSBI / 无 FDT（裸机）。
+  注：`zawrs` 在基础核默认开启且依赖 A，故一并关闭以保持 A 关闭。

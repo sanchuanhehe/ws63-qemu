@@ -9,9 +9,9 @@
  * remaining peripherals. Interrupts (the custom SYS_CTL1 controller) are NOT
  * modeled — blinky (GPIO busy-loop) and polled UART output need no IRQ delivery.
  *
- * CPU: the model defaults to the sifive-e34 core (rv32imafc); WS63 firmware is
- * rv32imfc (no atomics, toolchain-enforced) so the unused 'A' extension is a
- * harmless superset. A faithful named "ws63" CPU (dropping A) is a future step.
+ * CPU: a single RV32IMFC_Zicsr hart, built from QEMU's configurable "rv32" core
+ * with exactly I/M/F/C enabled and A (atomics) + D (double float) disabled — a
+ * faithful match for the WS63 ISA.
  *
  * Copyright (c) 2026 ws63-rs contributors.
  *
@@ -30,8 +30,9 @@
 #include "chardev/char.h"
 #include "chardev/char-fe.h"
 #include "target/riscv/cpu.h"
-#include "hw/riscv/riscv_hart.h"
+#include "hw/core/cpu.h"
 #include "sysemu/sysemu.h"
+#include "sysemu/reset.h"
 #include "exec/address-spaces.h"
 #include "elf.h"
 
@@ -270,7 +271,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(WS63MachineState, WS63_MACHINE)
 struct WS63MachineState {
     MachineState parent_obj;
 
-    RISCVHartArrayState cpus;
+    RISCVCPU cpu;
     MemoryRegion bootrom;
     MemoryRegion rom;
     MemoryRegion itcm;
@@ -283,6 +284,13 @@ static void ws63_make_ram(MemoryRegion *sys, MemoryRegion *mr,
 {
     memory_region_init_ram(mr, NULL, name, size, &error_fatal);
     memory_region_add_subregion(sys, base, mr);
+}
+
+/* Reset the hart to its resetvec at machine reset (CPUs created outside a
+ * hart-array are not otherwise in the reset path). */
+static void ws63_cpu_reset(void *opaque)
+{
+    cpu_reset(CPU(opaque));
 }
 
 static void ws63_machine_init(MachineState *machine)
@@ -330,15 +338,24 @@ static void ws63_machine_init(MachineState *machine)
         entry = elf_entry;
     }
 
-    /* Single rv32imfc hart; reset directly to the firmware entry (no OpenSBI,
-     * no FDT — bare-metal). */
-    object_initialize_child(OBJECT(machine), "cpus", &s->cpus,
-                            TYPE_RISCV_HART_ARRAY);
-    object_property_set_str(OBJECT(&s->cpus), "cpu-type", machine->cpu_type,
-                            &error_abort);
-    object_property_set_int(OBJECT(&s->cpus), "num-harts", 1, &error_abort);
-    object_property_set_int(OBJECT(&s->cpus), "resetvec", entry, &error_abort);
-    sysbus_realize(SYS_BUS_DEVICE(&s->cpus), &error_fatal);
+    /* Single RV32IMFC_Zicsr hart — faithful to WS63: enable I/M/F/C, leave A
+     * (atomics) and D (double float) OFF. The configurable "rv32" base CPU
+     * starts with no MISA extensions, so we set exactly what the chip has.
+     * Reset directly to the firmware entry (no OpenSBI, no FDT — bare-metal). */
+    object_initialize_child(OBJECT(machine), "cpu", &s->cpu, machine->cpu_type);
+    object_property_set_bool(OBJECT(&s->cpu), "i", true, &error_abort);
+    object_property_set_bool(OBJECT(&s->cpu), "m", true, &error_abort);
+    object_property_set_bool(OBJECT(&s->cpu), "f", true, &error_abort);
+    object_property_set_bool(OBJECT(&s->cpu), "c", true, &error_abort);
+    object_property_set_bool(OBJECT(&s->cpu), "a", false, &error_abort);
+    object_property_set_bool(OBJECT(&s->cpu), "d", false, &error_abort);
+    /* zawrs is on by default for the base rv32 core but requires A; the WS63
+     * target (rv32imfc) has neither, so turn it off to keep A disabled. */
+    object_property_set_bool(OBJECT(&s->cpu), "zawrs", false, &error_abort);
+    qdev_prop_set_uint64(DEVICE(&s->cpu), "resetvec", entry);
+    s->cpu.env.mhartid = 0;
+    qemu_register_reset(ws63_cpu_reset, &s->cpu);
+    qdev_realize(DEVICE(&s->cpu), NULL, &error_fatal);
 }
 
 static void ws63_machine_class_init(ObjectClass *oc, void *data)
@@ -348,7 +365,7 @@ static void ws63_machine_class_init(ObjectClass *oc, void *data)
     mc->desc = "HiSilicon WS63 (RV32IMFC Wi-Fi6/BLE/SLE SoC)";
     mc->init = ws63_machine_init;
     mc->max_cpus = 1;
-    mc->default_cpu_type = TYPE_RISCV_CPU_SIFIVE_E34; /* rv32imafc superset */
+    mc->default_cpu_type = TYPE_RISCV_CPU_BASE32; /* configured to rv32imfc in init */
     mc->default_ram_id = "ws63.sram";
     mc->default_ram_size = WS63_SRAM_SIZE;
 }

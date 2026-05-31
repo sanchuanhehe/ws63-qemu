@@ -46,7 +46,7 @@ DEBUG=1 bash scripts/run.sh <firmware.elf>   # 写 qemu.log
 
 | 方面 | 说明 |
 |------|------|
-| 机器 | `-M ws63`：单 RV32IMFC hart（默认 `sifive-e34` 核），WS63 内存映射，复位到 ELF entry |
+| 机器 | `-M ws63`：单 **RV32IMFC** hart（由可配置 rv32 核精确设为 I/M/F/C，关 A/D），WS63 内存映射，复位到 ELF entry |
 | UART0 | `0x4401_0000` 的**自定义 HiSilicon UART**（非 16550）；TX 直接输出到 `-serial` |
 | 内存 | BOOTROM/ROM/ITCM/DTCM/FLASH/SRAM，按 `ws63-rt/memory.x` 布局（见 [docs/memory-map.md](docs/memory-map.md)） |
 | 其它外设 | `create_unimplemented_device` 吸收（GPIO/Timer/SPI/I2C/…），`-d unimp` 可追踪 |
