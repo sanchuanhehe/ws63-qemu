@@ -112,9 +112,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(WS63IntcState, WS63_INTC)
 struct WS63IntcState {
     SysBusDevice parent_obj;
     CPURISCVState *env;            /* target hart (set by the machine) */
-    uint32_t loci[0x40];           /* CSRs 0xBC0..0xBFF (read-back state) */
-    uint32_t pending_hi[3];        /* pending bits for custom IRQs >=32 */
-    bool warned_hi;
+    uint32_t loci[0x40];           /* LOCIPRI/PRITHD read-back (0xBC0..0xBFF) */
 };
 
 /* Single global so the (context-free) custom-CSR ops can reach the intc. */
@@ -135,24 +133,16 @@ static void ws63_intc_set_irq(void *opaque, int n, int level)
     if (n < 0 || n >= WS63_IRQ_MAX) {
         return;
     }
-    if (n >= WS63_MIE_IRQ_LO && n <= WS63_MIE_IRQ_HI) {
-        if (s->env) {
-            riscv_cpu_update_mip(s->env, 1ull << n, level ? (1ull << n) : 0);
-        }
+    if (!s->env) {
         return;
     }
-    /* custom local interrupt (>=32) */
-    if (level) {
-        s->pending_hi[n / 32] |= 1u << (n % 32);
-        if (!s->warned_hi) {
-            s->warned_hi = true;
-            qemu_log_mask(LOG_UNIMP,
-                "ws63-intc: custom local IRQ %d asserted; CSR pending state "
-                "tracked, but in-core vectored delivery for IRQ>=32 is not "
-                "modeled (needs a target/riscv patch)\n", n);
-        }
+    if (n >= WS63_MIE_IRQ_LO && n <= WS63_MIE_IRQ_HI) {
+        /* Standard mie bits — QEMU delivers via mip + vectored mtvec. */
+        riscv_cpu_update_mip(s->env, 1ull << n, level ? (1ull << n) : 0);
     } else {
-        s->pending_hi[n / 32] &= ~(1u << (n % 32));
+        /* Custom local interrupt (>=32): deliver via the target/riscv hook,
+         * which sets mcause=irq + vectored mtvec, gated by LOCIEN + mstatus.MIE. */
+        riscv_cpu_set_local_irq(s->env, n, level);
     }
 }
 
@@ -202,18 +192,72 @@ static RISCVException ws63_csr_write_ignore(CPURISCVState *env, int csrno,
     return RISCV_EXCP_NONE;
 }
 
+/*
+ * Custom local-interrupt CSRs. Enable (LOCIEN0-2 @ 0xBE0-0xBE2) and pending
+ * (LOCIPD0-2 @ 0xBE8-0xBEA) map to env->ws63_locien/locipd (bit n = IRQ n):
+ *   LOCIEN0/LOCIPD0 -> IRQ 32-63  (word0 bits 32-63)
+ *   LOCIEN1/LOCIPD1 -> IRQ 64-95  (word1 bits 0-31)
+ *   LOCIEN2/LOCIPD2 -> IRQ 96-127 (word1 bits 32-63)
+ * LOCIPCLR (0xBF0): write irq_id to clear its pending bit. LOCIPRI/PRITHD and
+ * the rest keep simple read-back storage (priority threshold not yet enforced).
+ */
+#define WS63_CSR_LOCIEN0  0xBE0
+#define WS63_CSR_LOCIEN1  0xBE1
+#define WS63_CSR_LOCIEN2  0xBE2
+#define WS63_CSR_LOCIPD0  0xBE8
+#define WS63_CSR_LOCIPD1  0xBE9
+#define WS63_CSR_LOCIPD2  0xBEA
+#define WS63_CSR_LOCIPCLR 0xBF0
+
 static RISCVException ws63_loci_read(CPURISCVState *env, int csrno,
                                      target_ulong *val)
 {
-    *val = g_ws63_intc ? g_ws63_intc->loci[csrno - WS63_LOCI_CSR_BASE] : 0;
+    switch (csrno) {
+    case WS63_CSR_LOCIEN0: *val = (uint32_t)(env->ws63_locien[0] >> 32); break;
+    case WS63_CSR_LOCIEN1: *val = (uint32_t)env->ws63_locien[1]; break;
+    case WS63_CSR_LOCIEN2: *val = (uint32_t)(env->ws63_locien[1] >> 32); break;
+    case WS63_CSR_LOCIPD0: *val = (uint32_t)(env->ws63_locipd[0] >> 32); break;
+    case WS63_CSR_LOCIPD1: *val = (uint32_t)env->ws63_locipd[1]; break;
+    case WS63_CSR_LOCIPD2: *val = (uint32_t)(env->ws63_locipd[1] >> 32); break;
+    default:
+        *val = g_ws63_intc ? g_ws63_intc->loci[csrno - WS63_LOCI_CSR_BASE] : 0;
+        break;
+    }
     return RISCV_EXCP_NONE;
 }
 
 static RISCVException ws63_loci_write(CPURISCVState *env, int csrno,
                                       target_ulong val)
 {
-    if (g_ws63_intc) {
-        g_ws63_intc->loci[csrno - WS63_LOCI_CSR_BASE] = (uint32_t)val;
+    uint32_t v = (uint32_t)val;
+    switch (csrno) {
+    case WS63_CSR_LOCIEN0:
+        env->ws63_locien[0] = (env->ws63_locien[0] & 0xFFFFFFFFULL) | ((uint64_t)v << 32);
+        riscv_cpu_interrupt(env);
+        break;
+    case WS63_CSR_LOCIEN1:
+        env->ws63_locien[1] = (env->ws63_locien[1] & ~0xFFFFFFFFULL) | v;
+        riscv_cpu_interrupt(env);
+        break;
+    case WS63_CSR_LOCIEN2:
+        env->ws63_locien[1] = (env->ws63_locien[1] & 0xFFFFFFFFULL) | ((uint64_t)v << 32);
+        riscv_cpu_interrupt(env);
+        break;
+    case WS63_CSR_LOCIPD0: case WS63_CSR_LOCIPD1: case WS63_CSR_LOCIPD2:
+        break; /* pending is read-only; clear via LOCIPCLR */
+    case WS63_CSR_LOCIPCLR: {
+        int irq = v & 0xFFF;
+        if (irq >= 32 && irq < 128) {
+            env->ws63_locipd[irq >> 6] &= ~(1ULL << (irq & 63));
+            riscv_cpu_interrupt(env);
+        }
+        break;
+    }
+    default:
+        if (g_ws63_intc) {
+            g_ws63_intc->loci[csrno - WS63_LOCI_CSR_BASE] = v;
+        }
+        break;
     }
     return RISCV_EXCP_NONE;
 }
@@ -602,26 +646,54 @@ static uint64_t ws63_gpio_read(void *opaque, hwaddr off, unsigned size)
     }
 }
 
+/* Re-evaluate the GPIO IRQ line. `old_out` is the pin state before a write; for
+ * edge-triggered pins we latch INT_RAW on the matching transition, for
+ * level-triggered pins INT_RAW tracks the active level. Output drives input
+ * (loopback), so writing an output pin can raise its own interrupt — a
+ * self-contained interrupt source (and a reasonable GPIO loopback model). */
+static void ws63_gpio_eval(WS63GpioState *s, uint32_t old_out)
+{
+    uint32_t rose = ~old_out & s->out;
+    uint32_t fell = old_out & ~s->out;
+    uint32_t edge = (s->int_dedge & (rose | fell))
+                  | (~s->int_dedge & s->int_pol & rose)
+                  | (~s->int_dedge & ~s->int_pol & fell);
+    /* edge-type pins latch on a matching edge */
+    s->int_raw |= s->int_en & s->int_type & edge;
+    /* level-type pins track the active level */
+    uint32_t level_active = (s->int_pol & s->out) | (~s->int_pol & ~s->out);
+    uint32_t level_pins = s->int_en & ~s->int_type;
+    s->int_raw = (s->int_raw & ~level_pins) | (level_pins & level_active);
+
+    qemu_set_irq(s->irq, (s->int_raw & ~s->int_mask & s->int_en) ? 1 : 0);
+}
+
 static void ws63_gpio_write(void *opaque, hwaddr off, uint64_t val,
                             unsigned size)
 {
     WS63GpioState *s = opaque;
+    uint32_t old_out = s->out;
     switch (off) {
-    case 0x00: s->out = (uint32_t)val; break;
+    case 0x00: s->out = (uint32_t)val; ws63_gpio_eval(s, old_out); break;
     case 0x04: s->oen = (uint32_t)val; break;
-    case 0x0C: s->int_en = (uint32_t)val; break;
-    case 0x10: s->int_mask = (uint32_t)val; break;
+    case 0x0C: s->int_en = (uint32_t)val; ws63_gpio_eval(s, s->out); break;
+    case 0x10: s->int_mask = (uint32_t)val; ws63_gpio_eval(s, s->out); break;
     case 0x14: s->int_type = (uint32_t)val; break;
     case 0x18: s->int_pol = (uint32_t)val; break;
     case 0x1C: s->int_dedge = (uint32_t)val; break;
-    case 0x2C: s->int_raw &= ~(uint32_t)val; qemu_set_irq(s->irq, 0); break; /* EOI w1c */
+    case 0x2C: /* INT_EOI (w1c) */
+        s->int_raw &= ~(uint32_t)val;
+        ws63_gpio_eval(s, s->out);
+        break;
     case 0x30: /* DATA_SET (w1s) */
         s->out |= (uint32_t)val;
         qemu_log("ws63-gpio: SET -> out=0x%08x\n", s->out);
+        ws63_gpio_eval(s, old_out);
         break;
     case 0x34: /* DATA_CLR (w1c) */
         s->out &= ~(uint32_t)val;
         qemu_log("ws63-gpio: CLR -> out=0x%08x\n", s->out);
+        ws63_gpio_eval(s, old_out);
         break;
     default: break;
     }

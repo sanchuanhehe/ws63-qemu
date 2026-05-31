@@ -34,6 +34,22 @@ else
     echo "==> timer_irq: SKIP (build it: cargo build -p timer_irq --release)"
 fi
 
+# ---- gpio_irq: custom local interrupt (IRQ >= 32) delivery ----
+GPIO_ELF="$TARGET_DIR/gpio_irq"
+if [ -f "$GPIO_ELF" ]; then
+    echo "==> gpio_irq: expecting GPIO0 IRQ 33 (custom local, >=32) to be delivered"
+    timeout 5 "$QEMU_BIN" -M ws63 -nographic -serial mon:stdio \
+        -kernel "$GPIO_ELF" >"$TMP/gpio.out" 2>/dev/null
+    if grep -q "custom local IRQ (>=32) delivered" "$TMP/gpio.out"; then
+        echo "    PASS: $(grep -c 'gpio irq #' "$TMP/gpio.out") interrupts seen"
+    else
+        echo "    FAIL: >=32 IRQ not delivered. Got:"; head -4 "$TMP/gpio.out" | sed 's/^/      /'
+        fail=1
+    fi
+else
+    echo "==> gpio_irq: SKIP (build it: cargo build -p gpio_irq --release)"
+fi
+
 # ---- uart_hello: serial output ----
 UART_ELF="$TARGET_DIR/uart_hello"
 if [ -f "$UART_ELF" ]; then

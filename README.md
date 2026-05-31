@@ -56,7 +56,7 @@ DEBUG=1 bash scripts/run.sh <firmware.elf>   # 写 qemu.log
 | TIMER ×3 | 下数计数器 + 中断（IRQ 26/27/28），周期重载 |
 | GPIO0/1/2 | 输出 set/clr、输入、中断寄存器 |
 | SYS_CTL0 | 时钟状态（TCXO/PLL 锁），使 `init_clocks()` 跑通 |
-| 中断控制器 | 自定义 `LOCIxx` CSR + IRQ 路由；**IRQ 26–31 完整投递**（timer 已验证），≥32 仅建模 CSR 状态（见 [design](docs/design.md)） |
+| 中断控制器 | 自定义 `LOCIxx` CSR + IRQ 路由；**IRQ 26–31（mie 类）+ ≥32（自定义本地中断，target/riscv 补丁）均完整投递**（timer_irq / gpio_irq 已验证；见 [design](docs/design.md)） |
 | 内存 | BOOTROM/ROM/ITCM/DTCM/FLASH/SRAM，按 `ws63-rt/memory.x` 布局（见 [docs/memory-map.md](docs/memory-map.md)） |
 | 其它外设 | `create_unimplemented_device` 吸收（I2C/SPI/PWM/…），`-d unimp` 按地址可追踪 |
 

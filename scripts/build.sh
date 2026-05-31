@@ -28,6 +28,13 @@ fi
 echo "==> injecting hw/riscv/ws63.c"
 cp "$HERE/src/hw/riscv/ws63.c" "$QEMU_DIR/hw/riscv/ws63.c"
 
+# 2b. apply the target/riscv patch (custom WS63 local-interrupt delivery: the
+#     LOCIEN/LOCIPD CSRs + mcause 32-72 vectored delivery for IRQ>=32). Idempotent.
+if ! grep -q "ws63_locipd" "$QEMU_DIR/target/riscv/cpu_helper.c"; then
+    echo "==> applying patches/ws63-target-riscv.patch"
+    git -C "$QEMU_DIR" apply "$HERE/patches/ws63-target-riscv.patch"
+fi
+
 # 3. register in the meson source set (before the 'hw_arch +=' line)
 MB="$QEMU_DIR/hw/riscv/meson.build"
 if ! grep -q "CONFIG_WS63" "$MB"; then
