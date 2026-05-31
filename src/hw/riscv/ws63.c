@@ -784,6 +784,88 @@ static const TypeInfo ws63_sysctl0_typeinfo = {
 };
 
 /* ============================================================================
+ * TCXO clock/counter — the bootloaders (flashboot/loaderboot) call hal_tcxo_init/
+ * hal_tcxo_get during early clock bring-up: they enable the TCXO via TCXO_COUNT
+ * (0x440004C0) and then poll bit4 ("count valid") and read a free-running counter
+ * for us-resolution timekeeping. Model bit4 as always-set and back the count with
+ * the QEMU virtual clock at the nominal 24 MHz so delays/timeouts terminate.
+ * ========================================================================= */
+#define TYPE_WS63_TCXO "ws63-tcxo"
+OBJECT_DECLARE_SIMPLE_TYPE(WS63TcxoState, WS63_TCXO)
+
+#define WS63_TCXO_BASE      0x44000000
+#define WS63_TCXO_SIZE      0x00001000
+#define WS63_TCXO_COUNT_OFF 0x04C0      /* TCXO_COUNT_BASE_ADDR - base */
+#define WS63_TCXO_HZ        24000000ULL
+
+struct WS63TcxoState {
+    SysBusDevice parent_obj;
+    MemoryRegion iomem;
+    uint64_t count;     /* 64-bit free-running TCXO tick counter */
+    uint32_t shadow[WS63_TCXO_SIZE / 4];
+};
+
+/*
+ * Advance the 64-bit counter. Track the QEMU virtual clock at the nominal 24 MHz
+ * for rough realism, but ALWAYS advance by at least a step on each sample: in TCG
+ * without icount the virtual clock barely moves inside a tight MMIO-poll loop, so
+ * a purely clock-derived counter would freeze and TCXO delay loops would never
+ * terminate. The guaranteed step makes delays elapse after a bounded # of reads.
+ */
+static uint64_t ws63_tcxo_tick(WS63TcxoState *s)
+{
+    uint64_t clk = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) * WS63_TCXO_HZ
+                 / 1000000000ULL;
+    s->count = (clk > s->count + 64) ? clk : s->count + 64;
+    return s->count;
+}
+
+static uint64_t ws63_tcxo_read(void *opaque, hwaddr off, unsigned size)
+{
+    WS63TcxoState *s = opaque;
+    switch (off) {
+    case WS63_TCXO_COUNT_OFF:           /* +0x00: status, bit4 = count valid */
+        return 0x10;
+    case WS63_TCXO_COUNT_OFF + 4:       /* +0x04: count[31:0] (advance here) */
+        return (uint32_t)ws63_tcxo_tick(s);
+    case WS63_TCXO_COUNT_OFF + 8:       /* +0x08: count[63:32] */
+        return (uint32_t)(s->count >> 32);
+    default:
+        return s->shadow[(off / 4) % (WS63_TCXO_SIZE / 4)];
+    }
+}
+
+static void ws63_tcxo_write(void *opaque, hwaddr off, uint64_t val, unsigned size)
+{
+    WS63TcxoState *s = opaque;
+    s->shadow[(off / 4) % (WS63_TCXO_SIZE / 4)] = (uint32_t)val;
+}
+
+static const MemoryRegionOps ws63_tcxo_ops = {
+    .read = ws63_tcxo_read,
+    .write = ws63_tcxo_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .impl = { .min_access_size = 4, .max_access_size = 4 },
+    .valid = { .min_access_size = 4, .max_access_size = 4 },
+};
+
+static void ws63_tcxo_instance_init(Object *obj)
+{
+    WS63TcxoState *s = WS63_TCXO(obj);
+    SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
+    memory_region_init_io(&s->iomem, obj, &ws63_tcxo_ops, s,
+                          TYPE_WS63_TCXO, WS63_TCXO_SIZE);
+    sysbus_init_mmio(sbd, &s->iomem);
+}
+
+static const TypeInfo ws63_tcxo_typeinfo = {
+    .name          = TYPE_WS63_TCXO,
+    .parent        = TYPE_SYS_BUS_DEVICE,
+    .instance_size = sizeof(WS63TcxoState),
+    .instance_init = ws63_tcxo_instance_init,
+};
+
+/* ============================================================================
  * WS63 machine
  * ========================================================================= */
 #define TYPE_WS63_MACHINE MACHINE_TYPE_NAME("ws63")
@@ -796,6 +878,7 @@ struct WS63MachineState {
     WS63TimerState timer;
     WS63GpioState gpio[3];
     WS63SysCtl0State sysctl0;
+    WS63TcxoState tcxo;
     MemoryRegion bootrom;
     MemoryRegion rom;
     MemoryRegion itcm;
@@ -813,7 +896,20 @@ static void ws63_make_ram(MemoryRegion *sys, MemoryRegion *mr,
 
 static void ws63_cpu_reset(void *opaque)
 {
-    cpu_reset(CPU(opaque));
+    RISCVCPU *cpu = opaque;
+
+    cpu_reset(CPU(cpu));
+    /*
+     * Emulate the boot-stage hand-off ABI: on real silicon each boot stage is
+     * entered with a0 = pointer to a boot-parameter block set up by the previous
+     * stage (mask ROM -> loaderboot -> flashboot -> app). A standalone "-kernel"
+     * boot has no previous stage, so a0 would be 0; the WS63 bootloaders
+     * dereference a0 in their reset path (lw t3,0(a0)) before mtvec is even set,
+     * which would load-fault and then double-fault to pc=0. Point a0 at a
+     * readable, zeroed SRAM word so the boot-reason load reads 0 ("normal boot")
+     * and startup proceeds. Harmless to firmwares that ignore a0 (rt/app).
+     */
+    cpu->env.gpr[10] = WS63_SRAM_BASE; /* a0 */
 }
 
 static void ws63_machine_init(MachineState *machine)
@@ -854,6 +950,11 @@ static void ws63_machine_init(MachineState *machine)
     object_initialize_child(OBJECT(machine), "sysctl0", &s->sysctl0, TYPE_WS63_SYSCTL0);
     sysbus_realize(SYS_BUS_DEVICE(&s->sysctl0), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->sysctl0), 0, WS63_SYSCTL0_BASE);
+
+    /* TCXO clock/counter (over the absorber) — early bootloader clock bring-up. */
+    object_initialize_child(OBJECT(machine), "tcxo", &s->tcxo, TYPE_WS63_TCXO);
+    sysbus_realize(SYS_BUS_DEVICE(&s->tcxo), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->tcxo), 0, WS63_TCXO_BASE);
 
     /* TIMER (IRQ 26/27/28). */
     object_initialize_child(OBJECT(machine), "timer", &s->timer, TYPE_WS63_TIMER);
@@ -948,6 +1049,7 @@ static void ws63_register_types(void)
     type_register_static(&ws63_timer_typeinfo);
     type_register_static(&ws63_gpio_typeinfo);
     type_register_static(&ws63_sysctl0_typeinfo);
+    type_register_static(&ws63_tcxo_typeinfo);
     type_register_static(&ws63_machine_typeinfo);
 }
 
