@@ -1170,15 +1170,17 @@ static void ws63_wdt_arm(WS63PeriphState *s)
  * transfer-complete, and (if the channel's TC interrupt is enabled+unmasked)
  * raise the DMA IRQ. Channel regs: base 0x100 + ch*0x20; dest@+0x04, cfg@+0x08,
  * src@+0x10, ctrl@+0x14 (transfersize[11:0], swsize[20:18], dwsize[23:21],
- * src_inc[27], dest_inc[28], tc_int_en[31]).
+ * src_inc[26], dest_inc[27], tc_int_en[31]). The channel cfg adds the
+ * peripheral flow-control fields decoded below: src_per[1:4], dest_per[5:8],
+ * fc_tt[9:11], int_err_mask[12], tc_int_mask[13], active[15].
  */
 static void ws63_dma_run(WS63PeriphState *s, int ch)
 {
     uint32_t base = 0x100 + (uint32_t)ch * 0x20;
     uint32_t dst  = s->shadow[(base + 0x04) / 4];
+    uint32_t cfg  = s->shadow[(base + 0x08) / 4];
     uint32_t src  = s->shadow[(base + 0x10) / 4];
     uint32_t ctrl = s->shadow[(base + 0x14) / 4];
-    uint32_t cfg  = s->shadow[(base + 0x08) / 4];
     /* v151 ctrl: transfersize[0:11], swsize[18:20], dwsize[21:23],
      * src_inc bit26, dest_inc bit27, tc_int_en bit31. */
     uint32_t count = ctrl & 0xfff;
@@ -1186,20 +1188,48 @@ static void ws63_dma_run(WS63PeriphState *s, int ch)
     uint32_t dw = 1u << ((ctrl >> 21) & 0x7);
     bool sinc = (ctrl >> 26) & 0x1;
     bool dinc = (ctrl >> 27) & 0x1;
+    /* v151 cfg flow-control / handshaking fields. */
+    uint32_t fc   = (cfg >> 9) & 0x7;   /* fc_tt: transfer type / flow control */
+    uint32_t sper = (cfg >> 1) & 0xf;   /* src_per:  source handshaking ID      */
+    uint32_t dper = (cfg >> 5) & 0xf;   /* dest_per: destination handshaking ID */
     uint32_t i, w = sw < dw ? sw : dw;
 
     if (count > 0x10000) count = 0x10000;       /* safety bound */
     if (w == 0 || w > 8) w = 4;
+
+    /*
+     * Flow control (fc_tt): 0 = mem->mem, 1 = mem->periph, 2 = periph->mem,
+     * 3 = periph->periph. For the peripheral side the driver holds the address
+     * fixed (src_inc/dest_inc = 0) at a peripheral data register and names the
+     * request line via src_per/dest_per. Because the copy below uses the
+     * MMIO-aware cpu_physical_memory_{read,write}, a mem->periph beat lands in
+     * the destination peripheral's register handler (e.g. the SPI loopback
+     * FIFO at SPI_DR) and a periph->mem beat reads it back -- hardware
+     * handshaking is modelled as "every queued beat is serviced" (functional,
+     * not cycle-accurate request pacing).
+     */
+    qemu_log("ws63-dma: ch%d fc=%u sper=%u dper=%u %s%08x -> %s%08x x%u w%u\n",
+             ch, fc, sper, dper, sinc ? " " : "[", src, dinc ? " " : "[",
+             dst, count, w);
+
     for (i = 0; i < count; i++) {
         uint8_t b[8] = {0};
         cpu_physical_memory_read(sinc ? src + i * sw : src, b, w);
         cpu_physical_memory_write(dinc ? dst + i * dw : dst, b, w);
     }
     s->dma_done |= (1u << ch);
-    s->shadow[(base + 0x08) / 4] &= ~((1u << 0) | (1u << 10)); /* clr en+active */
+    /* Completion: hardware auto-clears ch_enable (bit0) and active (bit15). */
+    s->shadow[(base + 0x08) / 4] &= ~((1u << 0) | (1u << 15));
 
-    /* tc_int_en (ctrl[31]) and not masked (cfg.tc_int_mask = bit2) -> raise IRQ */
-    if ((ctrl & (1u << 31)) && !(cfg & (1u << 2))) {
+    /*
+     * Masked TC interrupt = ctrl.tc_int_en (bit31) AND cfg.tc_int_mask (bit13).
+     * The v151/PL080 cfg "mask enable" bit is active-high (1 = interrupt
+     * enabled/unmasked): the C SDK sets both ctrl bit31 and cfg bit13 when a
+     * completion callback is registered (fbb_ws63
+     * hal_dma_v151_config_single_block). The raw status (dma_done, read via
+     * ORI_INT_STATUS) is set regardless so polling always observes completion.
+     */
+    if ((ctrl & (1u << 31)) && (cfg & (1u << 13))) {
         qemu_set_irq(s->irq, 1);
     }
 }

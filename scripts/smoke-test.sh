@@ -108,5 +108,21 @@ else
     echo "==> blinky: SKIP (build it: cargo build -p blinky --release)"
 fi
 
+# ---- dma_loopback: peripheral DMA (mem<->SPI handshaking) + SDMA channel ----
+DMA_ELF="$TARGET_DIR/dma_loopback"
+if [ -f "$DMA_ELF" ]; then
+    echo "==> dma_loopback: expecting mem<->SPI0 peripheral DMA + SDMA ch8 to pass"
+    timeout 8 "$QEMU_BIN" -M ws63 -nographic -serial mon:stdio \
+        -kernel "$DMA_ELF" </dev/null >"$TMP/dma.out" 2>/dev/null || true
+    if grep -q "DMA LOOPBACK TEST: PASS" "$TMP/dma.out"; then
+        echo "    PASS: $(grep -m1 part1 "$TMP/dma.out" | sed 's/^[[:space:]]*//')"
+    else
+        echo "    FAIL: loopback not confirmed. Got:"; tail -5 "$TMP/dma.out" | sed 's/^/      /'
+        fail=1
+    fi
+else
+    echo "==> dma_loopback: SKIP (build it: cargo build -p dma_loopback --release)"
+fi
+
 [ "$fail" -eq 0 ] && echo "SMOKE TEST: PASS" || echo "SMOKE TEST: FAIL"
 exit "$fail"

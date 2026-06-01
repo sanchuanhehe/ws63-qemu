@@ -113,7 +113,9 @@ IRQ≥32(GPIO/UART/DMA…)已真正投递。`target/riscv` 补丁(`patches/ws63-
 ## 阶段 3 — 外设深度 ✅ 已完成
 
 `WS63.svd` 全部 **35 个外设均已建模**(无裸 catch-all 黑洞)。**行为完整**(真实数据搬运/计时/中断/回环/引脚):
-DMA/SDMA(真实内存搬运 + IRQ 59)、RTC(IRQ 29)、WDT(倒计时→真复位)、Timer×3、I2C0/1(回环 FIFO)、SPI0/1(回环 FIFO)、
+DMA/SDMA(真实内存搬运 + 外设 DMA:解析 `fc_tt`/`src_per`/`dest_per` 流控与握手字段,MMIO-aware 拷贝把 mem↔外设 DR
+搬运路由到设备 handler——经 mem↔SPI0 环回端到端验证;TC 中断门控 `tc_int_en(ctrl.31)&&tc_int_mask(cfg.13)` 对齐 PL080;IRQ 59)、
+RTC(IRQ 29)、WDT(倒计时→真复位)、Timer×3、I2C0/1(回环 FIFO)、SPI0/1(回环 FIFO)、
 I2S、LSADC(转换 + IRQ)、UART-RX、GPIO(真实引脚信号网 + 边沿/电平中断)、TSENSOR、EFUSE(OTP 按位或)、TRNG、TCXO、SFC。
 system reset、IO_CONFIG pinmux 路由亦已建模。完整矩阵见 [`docs/design.md` §外设建模矩阵](docs/design.md)。
 **配置影子档**(可读回、无副作用):RF/SHARE_MEM/SPACC-PKE-KM 等本质模拟量或物理硬件。
