@@ -12,13 +12,13 @@ jobs:
   build-and-smoke:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install build deps
         run: bash scripts/setup-deps.sh
 
       - name: Cache QEMU build
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: qemu
           key: qemu-${{ env.QEMU_TAG }}-${{ hashFiles('src/hw/riscv/ws63.c') }}-${{ runner.os }}
@@ -36,7 +36,7 @@ jobs:
           rustup toolchain link ws63 "$PWD/stage2"
 
       - name: Checkout ws63-rs (firmware source)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: sanchuanhehe/ws63-rs
           submodules: recursive
