@@ -1,0 +1,26 @@
+# fbb_ws63 C SDK peripheral-sample fixtures for scripts/csdk-test.sh
+# Each line: <elf> | <timeout seconds> | <expected UART marker (egrep regex)>
+#
+# Fixtures are ws63-liteos-app images built with exactly one peripheral sample
+# selected; regenerate with scripts/build-csdk-samples.sh. The marker is the
+# sample's own osal_printk() success line, so a match proves the peripheral model
+# drove real vendor firmware correctly. These complement scripts/smoke-test.sh
+# (ws63-rs Rust firmware) by exercising the peripherals from the C SDK side.
+#
+# elf          | to | marker  (marker must not contain '|', the field delimiter)
+tcxo.elf       | 16 | tcxo get ms work normall
+systick.elf    | 16 | systick get ms work normall
+
+# --- Known gaps (sample builds, but the model doesn't yet satisfy its path) ---
+# These C SDK samples build cleanly (scripts/build-csdk-samples.sh timer dma
+# watchdog) but currently hang in QEMU because they exercise paths the models
+# don't fully implement yet. Tracked as future work; NOT asserted so CI stays green:
+#   timer    - waits on the hardware-timer completion IRQ (TIMER_1_IRQN=27) routed
+#              through the C SDK vectored-IRQ framework; callback never fires.
+#   dma      - uapi_dma_transfer_memory_lli / enable_lli (linked-list descriptor
+#              mode); our DMA models the simple channel-cfg transfer, not LLI chains.
+#   watchdog - stalls after "init watchdog" (kick/feed timing vs our WDT timeout).
+#   adc      - prints "start adc sample" then blocks in adc_port_read (conversion
+#              done-status / data-register read path not driven by the LSADC model).
+# Pattern: counter-read samples (tcxo/systick) pass; samples that block on a
+# conversion/transfer/IRQ completion need that completion mechanism modeled.

@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **C SDK peripheral-sample tests** (`scripts/csdk-test.sh` + `tests/csdk/`). Boots
+  prebuilt fbb_ws63 C SDK peripheral-sample ELFs on the WS63 machine and asserts
+  each sample's UART success marker — validating the peripheral models against real
+  vendor firmware (complements the ws63-rs `scripts/smoke-test.sh`). Shipping
+  fixtures: `tcxo` (TCXO ms/us counter) and `systick` (SysTick counter), both green
+  in CI. `scripts/build-csdk-samples.sh` regenerates fixtures from a fbb_ws63
+  checkout (selects one `CONFIG_SAMPLE_SUPPORT_*`, clean-builds, strips to ~400 KB).
+  Known gaps (sample builds but blocks on an unmodelled completion path, documented
+  in `tests/csdk/manifest.txt`): `timer` (timer-completion IRQ), `dma` (LLI
+  descriptor mode), `watchdog` (kick/feed timing), `adc` (conversion-done read).
+
 ## [0.2.0] - 2026-06-01
 
 ### Added

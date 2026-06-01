@@ -49,5 +49,11 @@ jobs:
           cargo build -p uart_hello --release || echo "uart_hello not yet in ws63-rs (skipped)"
           cargo build -p timer_irq --release || echo "timer_irq not yet in ws63-rs (skipped)"
 
-      - name: Smoke test (run firmware on the WS63 machine)
+      - name: Smoke test (run ws63-rs firmware on the WS63 machine)
         run: WS63_RS="$PWD/ws63-rs" bash scripts/smoke-test.sh
+
+      # Boots the committed fbb_ws63 C SDK peripheral-sample ELFs (tests/csdk/) and
+      # asserts each sample's UART marker — validates the peripheral models against
+      # real vendor firmware. No SDK/toolchain needed (uses prebuilt fixtures).
+      - name: C SDK peripheral-sample tests
+        run: bash scripts/csdk-test.sh

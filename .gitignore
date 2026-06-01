@@ -6,3 +6,5 @@
 qemu.log
 *.o
 *.elf
+# ...but C SDK sample test fixtures are committed binaries (see tests/csdk/)
+!tests/csdk/*.elf
