@@ -1323,7 +1323,7 @@ static const struct {
     { 0x40006000, PK_WDT,     0x1000, "wdt",       0 },
     { 0x44008000, PK_EFUSE,   0x1000, "efuse",     0 },
     { 0x4400C000, PK_LSADC,   0x1000, "lsadc",     WS63_IRQ_LSADC },
-    { 0x4400D000, PK_GENERIC, 0x1000, "io_config", 0 },
+    /* IO_CONFIG (0x4400D000) is the ws63-pinmux device (pin-mux fabric). */
     { 0x4400E000, PK_TSENSOR, 0x1000, "tsensor",   0 },
     { 0x44018000, PK_I2C,     0x100,  "i2c0",      0 },
     { 0x44018100, PK_I2C,     0x100,  "i2c1",      0 },
@@ -1342,6 +1342,84 @@ static const struct {
 #define WS63_NUM_PERIPH ARRAY_SIZE(ws63_periph_table)
 
 /* ============================================================================
+ * IO_CONFIG pin-mux fabric (0x4400D000). GPIO_xx_SEL[2:0] selects each pin's
+ * function (0 = GPIO, 1-7 = UART/SPI/I2C/PWM/...). We route the GPIO pin net
+ * through here: a source pin reaches the board net only while it is muxed to
+ * GPIO; mux it to another function and the GPIO signal is gated (the pin then
+ * carries that peripheral instead — those signals are covered by each
+ * peripheral's own TX/RX/loopback rather than re-routed onto this net).
+ * ========================================================================= */
+#define TYPE_WS63_PINMUX "ws63-pinmux"
+OBJECT_DECLARE_SIMPLE_TYPE(WS63PinmuxState, WS63_PINMUX)
+
+#define WS63_PINMUX_BASE 0x4400D000
+#define WS63_PINMUX_SIZE 0x1000
+
+struct WS63PinmuxState {
+    SysBusDevice parent_obj;
+    MemoryRegion iomem;
+    qemu_irq out[WS63_GPIO_PINS];       /* routed pin -> destination */
+    uint8_t in_level[WS63_GPIO_PINS];   /* source level (from GPIO output) */
+    uint32_t sel[WS63_PINMUX_SIZE / 4]; /* GPIO_xx_SEL @ 0x4*pin, func in [2:0] */
+};
+
+static void ws63_pinmux_route(WS63PinmuxState *s, int pin)
+{
+    uint32_t func = s->sel[pin] & 0x7;  /* 0 = GPIO function */
+    qemu_set_irq(s->out[pin], func == 0 ? s->in_level[pin] : 0);
+}
+
+static void ws63_pinmux_set_in(void *opaque, int n, int level)
+{
+    WS63PinmuxState *s = opaque;
+    if (n < WS63_GPIO_PINS) {
+        s->in_level[n] = level ? 1 : 0;
+        ws63_pinmux_route(s, n);
+    }
+}
+
+static uint64_t ws63_pinmux_read(void *opaque, hwaddr off, unsigned size)
+{
+    WS63PinmuxState *s = opaque;
+    return s->sel[(off / 4) % (WS63_PINMUX_SIZE / 4)];
+}
+
+static void ws63_pinmux_write(void *opaque, hwaddr off, uint64_t val, unsigned size)
+{
+    WS63PinmuxState *s = opaque;
+    s->sel[(off / 4) % (WS63_PINMUX_SIZE / 4)] = (uint32_t)val;
+    if ((off / 4) < WS63_GPIO_PINS) {   /* GPIO_pin_SEL changed -> re-route pin */
+        ws63_pinmux_route(s, off / 4);
+    }
+}
+
+static const MemoryRegionOps ws63_pinmux_ops = {
+    .read = ws63_pinmux_read,
+    .write = ws63_pinmux_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .impl = { .min_access_size = 4, .max_access_size = 4 },
+    .valid = { .min_access_size = 4, .max_access_size = 4 },
+};
+
+static void ws63_pinmux_instance_init(Object *obj)
+{
+    WS63PinmuxState *s = WS63_PINMUX(obj);
+    SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
+    memory_region_init_io(&s->iomem, obj, &ws63_pinmux_ops, s,
+                          TYPE_WS63_PINMUX, WS63_PINMUX_SIZE);
+    sysbus_init_mmio(sbd, &s->iomem);
+    qdev_init_gpio_in(DEVICE(obj), ws63_pinmux_set_in, WS63_GPIO_PINS);
+    qdev_init_gpio_out(DEVICE(obj), s->out, WS63_GPIO_PINS);
+}
+
+static const TypeInfo ws63_pinmux_typeinfo = {
+    .name          = TYPE_WS63_PINMUX,
+    .parent        = TYPE_SYS_BUS_DEVICE,
+    .instance_size = sizeof(WS63PinmuxState),
+    .instance_init = ws63_pinmux_instance_init,
+};
+
+/* ============================================================================
  * WS63 machine
  * ========================================================================= */
 #define TYPE_WS63_MACHINE MACHINE_TYPE_NAME("ws63")
@@ -1356,6 +1434,7 @@ struct WS63MachineState {
     WS63SysCtl0State sysctl0;
     WS63TcxoState tcxo;
     WS63SfcState sfc;
+    WS63PinmuxState pinmux;
     WS63PeriphState periph[WS63_NUM_PERIPH];
     MemoryRegion bootrom;
     MemoryRegion rom;
@@ -1475,12 +1554,19 @@ static void ws63_machine_init(MachineState *machine)
         sysbus_connect_irq(SYS_BUS_DEVICE(&s->gpio[i]), 0,
                            qdev_get_gpio_in(DEVICE(&s->intc), WS63_IRQ_GPIO0 + i));
     }
-    /* Board-level pin net: wire GPIO0 output pins -> GPIO1 input pins, so a pin
-     * driven on one bank is read (and can interrupt) on another. This models real
-     * pin behavior across the chip I/O net (board wiring); the same gpio-in lines
-     * can also be driven externally from the monitor (qom-set) or another device. */
+    /* IO_CONFIG pin-mux fabric (0x4400D000). */
+    object_initialize_child(OBJECT(machine), "pinmux", &s->pinmux, TYPE_WS63_PINMUX);
+    sysbus_realize(SYS_BUS_DEVICE(&s->pinmux), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->pinmux), 0, WS63_PINMUX_BASE);
+
+    /* Board-level pin net, ROUTED THROUGH THE PIN MUX: GPIO0 output pins ->
+     * pinmux -> GPIO1 input pins. A pin reaches GPIO1 only while IO_CONFIG muxes
+     * it to GPIO; mux it elsewhere and the pinmux gates the GPIO signal. The
+     * pinmux input lines can also be driven externally (monitor / another dev). */
     for (int i = 0; i < WS63_GPIO_PINS; i++) {
         qdev_connect_gpio_out(DEVICE(&s->gpio[0]), i,
+                              qdev_get_gpio_in(DEVICE(&s->pinmux), i));
+        qdev_connect_gpio_out(DEVICE(&s->pinmux), i,
                               qdev_get_gpio_in(DEVICE(&s->gpio[1]), i));
     }
 
@@ -1560,6 +1646,7 @@ static void ws63_register_types(void)
     type_register_static(&ws63_sysctl0_typeinfo);
     type_register_static(&ws63_tcxo_typeinfo);
     type_register_static(&ws63_sfc_typeinfo);
+    type_register_static(&ws63_pinmux_typeinfo);
     type_register_static(&ws63_periph_typeinfo);
     type_register_static(&ws63_machine_typeinfo);
 }
