@@ -156,5 +156,21 @@ else
     echo "==> rf_port_demo: SKIP (build it: cargo build -p rf_port_demo --release)"
 fi
 
+# ---- sched_demo: cooperative scheduler (context switch + semaphore) ----
+SCHED_ELF="$TARGET_DIR/sched_demo"
+if [ -f "$SCHED_ELF" ]; then
+    echo "==> sched_demo: expecting multitask context switch + semaphore to pass"
+    timeout 8 "$QEMU_BIN" -M ws63 -nographic -serial mon:stdio \
+        -kernel "$SCHED_ELF" </dev/null >"$TMP/sched.out" 2>/dev/null || true
+    if grep -q "SCHED DEMO: PASS" "$TMP/sched.out"; then
+        echo "    PASS: $(grep -m1 'semaphore items' "$TMP/sched.out" | sed 's/^[[:space:]]*//')"
+    else
+        echo "    FAIL: scheduler not confirmed. Got:"; tail -6 "$TMP/sched.out" | sed 's/^/      /'
+        fail=1
+    fi
+else
+    echo "==> sched_demo: SKIP (build it: cargo build -p sched_demo --release)"
+fi
+
 [ "$fail" -eq 0 ] && echo "SMOKE TEST: PASS" || echo "SMOKE TEST: FAIL"
 exit "$fail"
