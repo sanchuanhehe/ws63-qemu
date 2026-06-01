@@ -50,10 +50,18 @@ index 77e7e98..00cfe38 100644
  void riscv_cpu_set_rdtime_fn(CPURISCVState *env, uint64_t (*fn)(void *),
                               void *arg);
 diff --git a/target/riscv/cpu_helper.c b/target/riscv/cpu_helper.c
-index 803d874..31de3ad 100644
+index 803d874..97e2715 100644
 --- a/target/riscv/cpu_helper.c
 +++ b/target/riscv/cpu_helper.c
-@@ -500,6 +500,41 @@ int riscv_cpu_vsirq_pending(CPURISCVState *env)
+@@ -31,6 +31,7 @@
+ #include "trace.h"
+ #include "semihosting/common-semi.h"
+ #include "sysemu/cpu-timers.h"
++#include "sysemu/runstate.h"
+ #include "cpu_bits.h"
+ #include "debug.h"
+ #include "tcg/oversized-guest.h"
+@@ -500,6 +501,41 @@ int riscv_cpu_vsirq_pending(CPURISCVState *env)
                                      (irqs | irqs_f_vs), env->hviprio);
  }
  
@@ -95,7 +103,7 @@ index 803d874..31de3ad 100644
  static int riscv_cpu_local_irq_pending(CPURISCVState *env)
  {
      uint64_t irqs, pending, mie, hsie, vsie, irqs_f, irqs_f_vs;
-@@ -530,6 +565,14 @@ static int riscv_cpu_local_irq_pending(CPURISCVState *env)
+@@ -530,6 +566,14 @@ static int riscv_cpu_local_irq_pending(CPURISCVState *env)
                                          irqs, env->miprio);
      }
  
@@ -110,7 +118,7 @@ index 803d874..31de3ad 100644
      /* Check for virtual S-mode interrupts. */
      irqs_f = env->mvip & (env->mvien & ~env->mideleg) & env->sie;
  
-@@ -728,7 +771,9 @@ void riscv_cpu_interrupt(CPURISCVState *env)
+@@ -728,7 +772,9 @@ void riscv_cpu_interrupt(CPURISCVState *env)
  
      vstip = env->vstime_irq ? MIP_VSTIP : 0;
  
@@ -121,7 +129,7 @@ index 803d874..31de3ad 100644
          cpu_interrupt(cs, CPU_INTERRUPT_HARD);
      } else {
          cpu_reset_interrupt(cs, CPU_INTERRUPT_HARD);
-@@ -751,6 +796,26 @@ uint64_t riscv_cpu_update_mip(CPURISCVState *env, uint64_t mask, uint64_t value)
+@@ -751,6 +797,26 @@ uint64_t riscv_cpu_update_mip(CPURISCVState *env, uint64_t mask, uint64_t value)
      return old;
  }
  
@@ -148,7 +156,7 @@ index 803d874..31de3ad 100644
  void riscv_cpu_set_rdtime_fn(CPURISCVState *env, uint64_t (*fn)(void *),
                               void *arg)
  {
-@@ -1800,6 +1865,278 @@ static target_ulong promote_load_fault(target_ulong orig_cause)
+@@ -1800,6 +1866,325 @@ static target_ulong promote_load_fault(target_ulong orig_cause)
      /* if no promotion, return original cause */
      return orig_cause;
  }
@@ -325,6 +333,35 @@ index 803d874..31de3ad 100644
 +    return n;
 +}
 +
++/*
++ * WS63 watchdog ROM-API emulation. The whole watchdog stack lives in the mask
++ * ROM (uapi_watchdog_* @ 0x109f7e.., hal_watchdog_* ..) which ships no binary, so
++ * the calls would otherwise be no-op-stubbed and the WDT would never run (kicks
++ * do nothing; a hung firmware would never be reset). We emulate the API with a
++ * virtual one-shot timer: enable() arms it for the configured timeout, kick()
++ * re-arms it, and on expiry (i.e. the firmware stopped kicking) we reset the SoC
++ * — the watchdog's actual job. A healthy firmware that keeps kicking is never
++ * reset. (Resetting from the timer callback is thread-safe via
++ * qemu_system_reset_request; injecting the firmware's interrupt-mode timeout
++ * callback would need vCPU-synchronised redirection and is not modelled.)
++ */
++static QEMUTimer *g_ws63_wdt_timer;
++static uint32_t g_ws63_wdt_timeout = 2; /* seconds, from uapi_watchdog_init */
++
++static void ws63_wdt_fire(void *opaque)
++{
++    qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
++}
++
++static void ws63_wdt_rearm(void)
++{
++    if (!g_ws63_wdt_timer) {
++        g_ws63_wdt_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, ws63_wdt_fire, NULL);
++    }
++    timer_mod(g_ws63_wdt_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
++              (uint64_t)g_ws63_wdt_timeout * 1000000000ULL);
++}
++
 +static void ws63_rom_call(CPURISCVState *env)
 +{
 +    uint32_t pc = env->pc;
@@ -415,6 +452,24 @@ index 803d874..31de3ad 100644
 +    case 0x109ab8: /* hal_sfc_v150_funcs_get -> vtable ptr */
 +        ret = ws63_rom_vtable(1);
 +        break;
++    /* --- watchdog ROM API (emulated; see ws63_wdt_fire) --- */
++    case 0x109f7e: /* uapi_watchdog_init(timeout_seconds) */
++        g_ws63_wdt_timeout = g[WS63_A0] ? g[WS63_A0] : 2;
++        break;
++    case 0x109fb6: /* uapi_watchdog_enable(mode) -> arm */
++        ws63_wdt_rearm();
++        break;
++    case 0x10a0a4: /* uapi_watchdog_kick -> re-arm */
++        if (g_ws63_wdt_timer) {
++            ws63_wdt_rearm();
++        }
++        break;
++    case 0x109fda: /* uapi_watchdog_disable */
++    case 0x10a00e: /* uapi_watchdog_deinit */
++        if (g_ws63_wdt_timer) {
++            timer_del(g_ws63_wdt_timer);
++        }
++        break;
 +    default:
 +        ret = 0; /* unknown ROM function: report success */
 +        break;
@@ -427,7 +482,7 @@ index 803d874..31de3ad 100644
  /*
   * Handle Traps
   *
-@@ -1822,6 +2159,31 @@ void riscv_cpu_do_interrupt(CPUState *cs)
+@@ -1822,6 +2207,31 @@ void riscv_cpu_do_interrupt(CPUState *cs)
      bool async = !!(cs->exception_index & RISCV_EXCP_INT_FLAG);
      target_ulong cause = cs->exception_index & RISCV_EXCP_INT_MASK;
      uint64_t deleg = async ? env->mideleg : env->medeleg;
