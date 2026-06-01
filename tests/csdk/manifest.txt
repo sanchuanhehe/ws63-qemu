@@ -13,14 +13,30 @@ systick.elf    | 16 | systick get ms work normall
 
 # --- Known gaps (sample builds, but the model doesn't yet satisfy its path) ---
 # These C SDK samples build cleanly (scripts/build-csdk-samples.sh timer dma
-# watchdog) but currently hang in QEMU because they exercise paths the models
-# don't fully implement yet. Tracked as future work; NOT asserted so CI stays green:
-#   timer    - waits on the hardware-timer completion IRQ (TIMER_1_IRQN=27) routed
-#              through the C SDK vectored-IRQ framework; callback never fires.
-#   dma      - uapi_dma_transfer_memory_lli / enable_lli (linked-list descriptor
-#              mode); our DMA models the simple channel-cfg transfer, not LLI chains.
-#   watchdog - stalls after "init watchdog" (kick/feed timing vs our WDT timeout).
-#   adc      - prints "start adc sample" then blocks in adc_port_read (conversion
-#              done-status / data-register read path not driven by the LSADC model).
-# Pattern: counter-read samples (tcxo/systick) pass; samples that block on a
-# conversion/transfer/IRQ completion need that completion mechanism modeled.
+# watchdog adc) but currently hang in QEMU. Root causes diagnosed (-d int / MMIO
+# tracing); NOT asserted so CI stays green. Two are NOT peripheral-model gaps:
+#
+#   timer    - NOT a model gap. The HW timer model is correct: channel 0 (IRQ 26,
+#              the LiteOS systick) fires fine (verified, ~2300 IRQ-26 in 8 s). The
+#              uapi_timer SOFTWARE-timer/task layer never reaches uapi_timer_start
+#              on TIMER_INDEX=1 in our env — channel 1 (IRQ 27) is never programmed
+#              (0 MMIO writes to timer+0x200). A LiteOS task/software-timer issue,
+#              not a register-model gap.
+#   watchdog - WDT_MODE_INTERRUPT (mode=1) expects a timeout INTERRUPT (callback
+#              "watchdog kick timeout!"), but the WDT has NO entry in chip_core_irq.h
+#              (no clean local-IRQ route; likely NMI/fixed vector). Our PK_WDT also
+#              has no IRQ wired (table irq=0). Needs the WDT-IRQ route + an
+#              interrupt-then-reset state machine.
+#   adc      - needs the v154 ADC calibration state machine + FIFO: init polls
+#              offset_cali_finish_sts(0x044.b0)=1, cap_cali_sts_0(0x0A0.finish)=1,
+#              gain_cali_gain(0x080.intr_gain_uint)=0, then drains the RX FIFO
+#              (lsadc_ctrl_1.rne @0x004); the read uses auto-scan -> IRQ 72 ->
+#              lsadc_ctrl_9.data(0x020). ~6 status regs + a FIFO/IRQ state machine.
+#   dma      - uapi_dma_transfer_memory_lli / enable_lli walk a linked-list
+#              descriptor chain in memory; our DMA models only the simple
+#              channel-cfg single transfer. Needs the LLI descriptor-chain walk +
+#              per-node completion callback.
+#
+# Pattern: counter-read samples (tcxo/systick) pass; completion-driven samples need
+# either a deep per-peripheral state machine (adc, dma) or are blocked outside the
+# peripheral model (timer = LiteOS software-timer; watchdog = no clean IRQ route).
