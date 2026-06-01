@@ -83,26 +83,31 @@ HAL 的 TX 路径（`uart.rs` `write_byte`）：轮询 `FIFO_STATUS.tx_fifo_full
 |------|------|------|
 | CPU (rv32imfc) / 内存 / 复位 / ELF 载入 | ✅ 真实 | — |
 | **xlinx 自定义 ISA** | ✅ 真实 | HiSilicon riscv31 私有指令（l.li/\*shf/b\*i/muliadd/jal16/ldmia/push-pop/压缩 lbu-sb…），**厂商 gcc 固件必需**；见 [xlinx-isa.md](xlinx-isa.md) |
-| UART0/1/2 | ✅ 真实 | 自定义 HiSilicon 寄存器；TX 输出到 chardev，最小 RX |
+| UART0/1/2 | ✅ 真实 | 自定义 HiSilicon 寄存器；TX→chardev，RX←chardev（中断使能时触发 IRQ 53/54/55）|
 | TIMER ×3 | ✅ 真实 | 下数计数器 + 中断（26/27/28），周期重载 |
 | GPIO0/1/2 | ✅ 真实 | 输出 set/clr、输入读、边沿/电平中断 + 输出→输入回环（可自触发 IRQ） |
 | SYS_CTL0 | ✅ 真实(部分) | 仅时钟状态（TCXO/PLL 锁）；其余读 0 |
 | **TCXO 时钟/计数器** | ✅ 真实(部分) | `0x440004C0`：bit4 count-valid + 64 位单调计数（+0x04/+0x08），供 bootloader us 级延时 |
 | **PPB（核内私有外设总线）** | 🟡 RAM 吸收 | `0xE0000000` FlashPatch 单元 + Cortex-M 式 SCS（`0xE000E000`）；加载已打补丁镜像故补丁单元无意义 |
 | 中断控制器 | ✅ 真实 | IRQ 26–31（mie 类）+ ≥32（自定义 LOCIxx，target/riscv 补丁）均完整投递；优先级阈值未强制 |
-| CLDO_CRG | 🟡 吸收 | `init_clocks` 只写不读关键位，吸收即可 |
 | **SFC（Flash 控制器）** | ✅ 真实(部分) | SPI 命令接口（RDID→W25Q16、RDSR→ready、命令完成）；flash XIP 内容未回填 |
-| **I2C0/1**（0x44018000/0x44018100）| ✅ 真实(部分) | SR 轮询位（done/tx/rx/stop）、COM 命令位自动清、RXR←TXR 回环 |
-| **SPI0/1**（0x44020000/0x44021000）| ✅ 真实(部分) | WSR 状态（busy=0/txfnf/txfe/rxfne）、DR 回环 |
+| **I2C0/1**（0x44018000/0x44018100）| ✅ **真实(行为完整)** | 真实回环 FIFO：TXR→RXR 多字节顺序回读、SR 完成位、COM 命令位自动清、IRQ 31/32 |
+| **SPI0/1**（0x44020000/0x44021000）| ✅ **真实(行为完整)** | 真实回环 FIFO：DR 写入→顺序读回、WSR 反映 FIFO（rxfne/txfe）、RLR 深度、IRQ 43/52 |
 | **PWM**（0x44024000）| ✅ 真实(部分) | 寄存器影子 + PERIODLOAD_FLAG=1 + START 自清 |
-| **I2S**（0x44025000）| ✅ 真实(部分) | 寄存器影子 + TX/RX 回环 |
-| **LSADC**（0x4400C000）| ✅ 真实(部分) | CTRL_1 rne=1/bsy=0、CTRL_9 伪随机 14-bit 采样码 |
+| **I2S**（0x44025000）| ✅ 真实(行为完整) | LEFT/RIGHT TX→RX 回环 |
+| **LSADC**（0x4400C000）| ✅ **真实(行为完整)** | CTRL_8 触发转换 → rne=1/bsy=0、CTRL_9 弹出 14-bit 采样 + 完成 IRQ 72（读清）|
 | **EFUSE**（0x44008000）| ✅ 真实(部分) | STS boot-done 位 + 数据窗影子（标定内容无 dump）|
-| **WDT**（0x40006000）| ✅ 真实(部分) | CNT←LOAD、EOI 读清；不触发真实复位 |
-| **RTC**（0x57024000）| ✅ 真实(部分) | CURRENT_VALUE 单调递增计数 + INT_STATUS（轮询用）|
-| **DMA/SDMA**（0x4A000000/0x520A0000）| ✅ **真实(行为完整)** | 通道使能即**真正搬运内存**（src→dst，按宽度/地址自增），置传输完成位，按 tc_int_en 触发 **IRQ 59**；INT_CLR 清除。已用裸机测试验证数据真实拷贝 |
+| **WDT**（0x40006000）| ✅ **真实(行为完整)** | QEMU 定时器倒计时；超时未喂狗则真复位 SoC（裸机测试验证）|
+| **RTC**（0x57024000）| ✅ **真实(行为完整)** | QEMU 定时器周期触发 **IRQ 29** + INT_STATUS/EOI；CURRENT_VALUE 计数 |
+| **DMA/SDMA**（0x4A000000/0x520A0000）| ✅ **真实(行为完整)** | 通道使能即**真正搬运内存**（src→dst，按宽度/地址自增），置传输完成位，按 tc_int_en 触发 **IRQ 59**；INT_CLR 清除（裸机测试验证）|
 | **TRNG**（0x44114000）| ✅ 真实 | FIFO_READY=ready、FIFO_DATA 伪随机（xorshift）|
-| **CLDO_CRG / IO_CONFIG / SPACC / PKE / KM / TSENSOR**（影子）| 🟡 影子 | 读写寄存器影子（驱动写后可读回）；无副作用建模 |
+| **SPACC / PKE / KM**（密码学）| 🟡 影子 | 寄存器影子（**未在启动路径**：mbedtls 用 ROM 表软件 AES）。真实 AES/SHA/RSA 可经 QEMU crypto 库实现，但 SPACC v2 多通道描述符协议复杂且无固件触发，列为按需扩展 |
+| **CLDO_CRG / IO_CONFIG / TSENSOR / RF_WB_CTL / SHARE_MEM / FAMA_REMAP / ULP_GPIO**（影子）| 🟡 影子 | 读写寄存器影子（驱动写后可读回）；RF_WB_CTL 的无线电/PHY 不仿真，仅寄存器配置影子 |
+
+> **覆盖度**：`WS63.svd` 的全部 **35 个外设**现均有模型（无裸 catch-all 黑洞）。
+> 「行为完整」= 真实数据搬运/计时/中断（DMA/RTC/WDT/Timer/I2C/SPI/I2S/LSADC/GPIO/UART）；
+> 「影子」= 寄存器读写一致（配置类，驱动不会因读回 0 而挂死）。**无法真实仿真**的只有模拟量
+> （ADC 电压、TSENSOR 温度——只能合成）与 **RF/PHY 射频**（RF_WB_CTL/WiFi/BT，物理边界）。
 
 ## 运行厂商 C SDK 固件（多角度对齐）
 

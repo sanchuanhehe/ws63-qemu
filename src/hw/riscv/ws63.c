@@ -45,6 +45,7 @@
 #include "hw/core/cpu.h"
 #include "sysemu/sysemu.h"
 #include "sysemu/reset.h"
+#include "sysemu/runstate.h"
 #include "exec/address-spaces.h"
 #include "elf.h"
 
@@ -94,8 +95,16 @@
 
 /* IRQ numbers (chip_core_irq.h). 26-31 use standard mie bits; >=32 are custom. */
 #define WS63_IRQ_TIMER0     26
+#define WS63_IRQ_RTC        29
+#define WS63_IRQ_I2C0       31
+#define WS63_IRQ_I2C1       32
 #define WS63_IRQ_GPIO0      33
+#define WS63_IRQ_SPI0       43
+#define WS63_IRQ_I2S        51
+#define WS63_IRQ_SPI1       52
+#define WS63_IRQ_UART0      53
 #define WS63_IRQ_DMA        59
+#define WS63_IRQ_LSADC      72
 #define WS63_IRQ_MAX        73
 #define WS63_MIE_IRQ_LO     26
 #define WS63_MIE_IRQ_HI     31
@@ -327,6 +336,7 @@ static uint64_t ws63_uart_read(void *opaque, hwaddr off, unsigned size)
     case UART_DATA: {
         uint8_t b = s->rx_byte;
         s->rx_valid = false;
+        qemu_set_irq(s->irq, 0);        /* RX consumed -> de-assert */
         return b;
     }
     case UART_LINE_STATUS:
@@ -368,6 +378,11 @@ static void ws63_uart_rx(void *opaque, const uint8_t *buf, int size)
     if (size > 0) {
         s->rx_byte = buf[0];
         s->rx_valid = true;
+        /* raise RX IRQ if the firmware enabled UART interrupts (INTR_EN @ 0x18);
+         * polled firmware leaves INTR_EN=0 and is unaffected. */
+        if (s->shadow[0x18 / 4]) {
+            qemu_set_irq(s->irq, 1);
+        }
     }
 }
 
@@ -971,8 +986,48 @@ struct WS63PeriphState {
     uint32_t rng;       /* TRNG LFSR / generic entropy */
     uint32_t dma_done;  /* DMA: per-channel transfer-complete mask */
     uint64_t counter;   /* RTC free-running counter */
+    QEMUTimer *qtimer;  /* RTC periodic / WDT timeout */
+    uint32_t int_status;/* RTC interrupt pending */
+    uint32_t fifo[32];  /* SPI/I2C loopback FIFO */
+    int fhead, ftail, fcnt;
     uint32_t shadow[WS63_PERIPH_MAXSIZE / 4];
 };
+
+#define WS63_RTC_HZ 32768ULL
+
+/* RTC periodic tick / WDT timeout */
+static void ws63_periph_timer(void *opaque)
+{
+    WS63PeriphState *s = opaque;
+
+    if (s->kind == PK_RTC) {
+        uint32_t load = s->shadow[0x00 / 4];        /* RTC_LOAD_COUNT */
+        if (!(s->shadow[0x08 / 4] & 0x4)) {          /* CONTROL.int_mask == 0 */
+            s->int_status = 1;
+            qemu_set_irq(s->irq, 1);
+        }
+        if (load == 0) {
+            load = WS63_RTC_HZ;
+        }
+        timer_mod(s->qtimer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+                  (uint64_t)load * 1000000000ULL / WS63_RTC_HZ);
+    } else if (s->kind == PK_WDT) {
+        /* watchdog bit: counter expired without a kick -> reset the SoC */
+        if (s->shadow[0x10 / 4] & 0x1) {             /* WDT_CR.wdt_en */
+            qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
+        }
+    }
+}
+
+static void ws63_wdt_arm(WS63PeriphState *s)
+{
+    uint32_t cnt = s->shadow[0x04 / 4] >> 8;          /* WDT_LOAD bits[31:8] */
+    if (cnt == 0) {
+        cnt = s->shadow[0x04 / 4] ? s->shadow[0x04 / 4] : WS63_RTC_HZ;
+    }
+    timer_mod(s->qtimer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+              (uint64_t)cnt * 1000000000ULL / WS63_RTC_HZ);
+}
 
 /*
  * Real DMA channel transfer: when a channel's cfg.ch_enable is written, copy the
@@ -1020,6 +1075,27 @@ static uint32_t ws63_xorshift(uint32_t *s)
     return x;
 }
 
+/* small loopback FIFO for I2C/SPI transfer engines */
+static void ws63_fifo_push(WS63PeriphState *s, uint32_t v)
+{
+    if (s->fcnt < (int)ARRAY_SIZE(s->fifo)) {
+        s->fifo[s->ftail] = v;
+        s->ftail = (s->ftail + 1) % ARRAY_SIZE(s->fifo);
+        s->fcnt++;
+    }
+}
+
+static uint32_t ws63_fifo_pop(WS63PeriphState *s)
+{
+    uint32_t v = 0;
+    if (s->fcnt > 0) {
+        v = s->fifo[s->fhead];
+        s->fhead = (s->fhead + 1) % ARRAY_SIZE(s->fifo);
+        s->fcnt--;
+    }
+    return v;
+}
+
 static uint64_t ws63_periph_read(void *opaque, hwaddr off, unsigned size)
 {
     WS63PeriphState *s = opaque;
@@ -1045,25 +1121,37 @@ static uint64_t ws63_periph_read(void *opaque, hwaddr off, unsigned size)
         if (off == 0x104) return 0x3;       /* FIFO_READY: data_ready|done */
         break;
     case PK_I2C:
-        if (off == 0x0C) return 0x39;       /* SR: int_done|int_rx|int_tx|int_stop */
-        if (off == 0x1C) return s->shadow[0x18 / 4] & 0xff; /* RXR <- TXR (loopback) */
-        if (off == 0x20) return 0x0a;       /* FIFOSTATUS: tx_empty|rx_full-ish */
+        if (off == 0x0C) return 0x39;                 /* SR: done|rx|tx|stop */
+        if (off == 0x1C) return ws63_fifo_pop(s) & 0xff; /* RXR: pop loopback FIFO */
+        if (off == 0x20) {                            /* FIFOSTATUS */
+            return (s->fcnt == 0 ? 0x08 : 0x00) | 0x02; /* rxfe if empty, txfe */
+        }
+        if (off == 0x28) return s->fcnt;              /* RXCOUNT */
         break;
     case PK_RTC:
         if (off == 0x04) { s->counter += 0x1000; return (uint32_t)s->counter; } /* CURRENT_VALUE */
-        if (off == 0x0C) return 0;          /* EOI: clears int */
-        if (off == 0x10) return 0x1;        /* INT_STATUS: pending */
+        if (off == 0x0C) { s->int_status = 0; qemu_set_irq(s->irq, 0); return 0; } /* EOI */
+        if (off == 0x10) return s->int_status; /* INT_STATUS */
         break;
     case PK_LSADC:
         if (off == 0x04) return 0x08;       /* CTRL_1: rne=1 (data), bsy=0 */
-        if (off == 0x20) return ws63_xorshift(&s->rng) & 0x3fff; /* CTRL_9: 14-bit code */
+        if (off == 0x20) {                  /* CTRL_9: pop 14-bit sample, clear IRQ */
+            qemu_set_irq(s->irq, 0);
+            return ws63_xorshift(&s->rng) & 0x3fff;
+        }
         break;
     case PK_SPI:
-        if (off == 0x60) return s->shadow[0x60 / 4]; /* DR: loopback (last write) */
-        if (off == 0xE4) return 0x0e;       /* WSR: busy=0, txfnf|txfe|rxfne */
-        if (off == 0xD0) return 0;          /* TLR */
-        if (off == 0xDC) return 1;          /* RLR */
-        if (off == 0xC0) return 0;          /* INSR */
+        if (off == 0x60) return ws63_fifo_pop(s);   /* DR: pop RX (loopback) FIFO */
+        if (off == 0xE4) {                          /* WSR */
+            return 0x06 | (s->fcnt > 0 ? 0x08 : 0); /* txfnf|txfe + rxfne if data */
+        }
+        if (off == 0xD0) return 0;                  /* TLR (TX FIFO empty) */
+        if (off == 0xDC) return s->fcnt;            /* RLR (RX FIFO level) */
+        if (off == 0xC0) return 0;                  /* INSR */
+        break;
+    case PK_I2S:
+        if (off == 0x54) return s->shadow[0x4C / 4]; /* LEFT_RX  <- LEFT_TX  */
+        if (off == 0x58) return s->shadow[0x50 / 4]; /* RIGHT_RX <- RIGHT_TX */
         break;
     case PK_EFUSE:
         if (off == 0x2C) return 0x0c;       /* STS: boot0_done|boot1_done */
@@ -1085,11 +1173,44 @@ static void ws63_periph_write(void *opaque, hwaddr off, uint64_t val, unsigned s
 
     switch (s->kind) {
     case PK_I2C:
-        if (off == 0x04) { v &= ~0xfu; }    /* COM: cmd bits[3:0] auto-clear */
+        if (off == 0x04) { v &= ~0xfu; }                 /* COM: cmd bits auto-clear */
+        else if (off == 0x18) { ws63_fifo_push(s, v & 0xff); } /* TXR -> loopback RX */
+        break;
+    case PK_SPI:
+        if (off == 0x60) { ws63_fifo_push(s, v); }       /* DR -> loopback RX FIFO */
+        break;
+    case PK_LSADC:
+        if (off == 0x1C && (v & 0x1)) {                  /* CTRL_8 start -> conv done IRQ */
+            qemu_set_irq(s->irq, 1);
+        }
         break;
     case PK_PWM:
         if (off == 0x08 || off == 0x18 || off == 0x28 || off == 0x38) {
             v = 0;                          /* group START self-clears */
+        }
+        break;
+    case PK_RTC:
+        if (off == 0x08) {                  /* RTC_CONTROL */
+            s->shadow[off / 4] = v;
+            if (v & 0x1) {                  /* enable -> arm periodic tick */
+                uint32_t load = s->shadow[0x00 / 4] ? s->shadow[0x00 / 4] : WS63_RTC_HZ;
+                timer_mod(s->qtimer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+                          (uint64_t)load * 1000000000ULL / WS63_RTC_HZ);
+            } else {
+                timer_del(s->qtimer);
+            }
+            return;
+        }
+        break;
+    case PK_WDT:
+        if (off == 0x10) {                  /* WDT_CR */
+            s->shadow[off / 4] = v;
+            if (v & 0x1) { ws63_wdt_arm(s); } else { timer_del(s->qtimer); }
+            return;
+        }
+        if (off == 0x08) {                  /* WDT_RESTART (kick) */
+            if (s->shadow[0x10 / 4] & 0x1) { ws63_wdt_arm(s); }
+            return;
         }
         break;
     case PK_DMA:
@@ -1127,6 +1248,9 @@ static void ws63_periph_realize(DeviceState *dev, Error **errp)
 {
     WS63PeriphState *s = WS63_PERIPH(dev);
     s->rng = 0x2545f491u ^ (s->kind << 8);
+    if (s->kind == PK_RTC || s->kind == PK_WDT) {
+        s->qtimer = timer_new_ns(QEMU_CLOCK_VIRTUAL, ws63_periph_timer, s);
+    }
     memory_region_init_io(&s->iomem, OBJECT(dev), &ws63_periph_ops, s,
                           TYPE_WS63_PERIPH, s->size ? s->size : WS63_PERIPH_MAXSIZE);
     sysbus_init_mmio(SYS_BUS_DEVICE(dev), &s->iomem);
@@ -1151,11 +1275,16 @@ static const TypeInfo ws63_periph_typeinfo = {
 static const struct {
     hwaddr base; uint32_t kind; uint32_t size; const char *name; int irq;
 } ws63_periph_table[] = {
-    /* GLB_CTL_M (0x40002000) is within the SYS_CTL0 window and handled there. */
+    /* GLB_CTL_M (0x40002000) is within the SYS_CTL0 window and handled there;
+     * SYS_CTL1 (0x44000000) is within the TCXO device window. */
     { 0x44001100, PK_GENERIC, 0x1000, "cldo_crg",  0 },
+    { 0x44004000, PK_GENERIC, 0x1000, "rf_wb_ctl", 0 }, /* RF/PHY radio NOT simulated; config shadow */
+    { 0x44006C00, PK_GENERIC, 0x400,  "share_mem", 0 },
+    { 0x44007800, PK_GENERIC, 0x400,  "fama_remap",0 },
+    { 0x57030000, PK_GENERIC, 0x1000, "ulp_gpio",  0 },
     { 0x40006000, PK_WDT,     0x1000, "wdt",       0 },
     { 0x44008000, PK_EFUSE,   0x1000, "efuse",     0 },
-    { 0x4400C000, PK_LSADC,   0x1000, "lsadc",     0 },
+    { 0x4400C000, PK_LSADC,   0x1000, "lsadc",     WS63_IRQ_LSADC },
     { 0x4400D000, PK_GENERIC, 0x1000, "io_config", 0 },
     { 0x4400E000, PK_GENERIC, 0x1000, "tsensor",   0 },
     { 0x44018000, PK_I2C,     0x100,  "i2c0",      0 },
@@ -1170,7 +1299,7 @@ static const struct {
     { 0x44114000, PK_TRNG,    0x1000, "trng",      0 },
     { 0x4A000000, PK_DMA,     0x1000, "dma",       WS63_IRQ_DMA },
     { 0x520A0000, PK_DMA,     0x1000, "sdma",      0 },
-    { 0x57024000, PK_RTC,     0x1000, "rtc",       0 },
+    { 0x57024000, PK_RTC,     0x1000, "rtc",       WS63_IRQ_RTC },
 };
 #define WS63_NUM_PERIPH ARRAY_SIZE(ws63_periph_table)
 
@@ -1316,6 +1445,8 @@ static void ws63_machine_init(MachineState *machine)
         qdev_prop_set_chr(uart, "chardev", serial_hd(i));
         sysbus_realize_and_unref(SYS_BUS_DEVICE(uart), &error_fatal);
         sysbus_mmio_map(SYS_BUS_DEVICE(uart), 0, uart_base[i]);
+        sysbus_connect_irq(SYS_BUS_DEVICE(uart), 0,
+                           qdev_get_gpio_in(DEVICE(&s->intc), WS63_IRQ_UART0 + i));
     }
 
     /* Firmware ELF (-kernel). Entry overrides the default reset PC. */
