@@ -1150,11 +1150,13 @@ static void ws63_dma_run(WS63PeriphState *s, int ch)
     uint32_t src  = s->shadow[(base + 0x10) / 4];
     uint32_t ctrl = s->shadow[(base + 0x14) / 4];
     uint32_t cfg  = s->shadow[(base + 0x08) / 4];
+    /* v151 ctrl: transfersize[0:11], swsize[18:20], dwsize[21:23],
+     * src_inc bit26, dest_inc bit27, tc_int_en bit31. */
     uint32_t count = ctrl & 0xfff;
     uint32_t sw = 1u << ((ctrl >> 18) & 0x7);
     uint32_t dw = 1u << ((ctrl >> 21) & 0x7);
-    bool sinc = (ctrl >> 27) & 0x1;
-    bool dinc = (ctrl >> 28) & 0x1;
+    bool sinc = (ctrl >> 26) & 0x1;
+    bool dinc = (ctrl >> 27) & 0x1;
     uint32_t i, w = sw < dw ? sw : dw;
 
     if (count > 0x10000) count = 0x10000;       /* safety bound */

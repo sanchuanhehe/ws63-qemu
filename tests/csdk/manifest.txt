@@ -11,33 +11,29 @@
 tcxo.elf       | 16 | tcxo get ms work normall
 systick.elf    | 16 | systick get ms work normall
 adc.elf        | 16 | voltage: [0-9]+ mv
+dma.elf        | 16 | dma memory copy test succ
 
 # --- Known gaps (sample builds, but the model doesn't yet satisfy its path) ---
-# These C SDK samples build cleanly (scripts/build-csdk-samples.sh timer dma
-# watchdog) but currently hang. Root causes diagnosed (-d int / MMIO tracing);
-# NOT asserted so CI stays green. (adc was fixed — see above.)
+# Diagnosed (-d int / MMIO tracing); NOT asserted so CI stays green.
 #
-# A systemic fix landed first: local IRQs >=32 now auto-clear LOCIPD on delivery
-# (edge/one-shot, matching the SoC's LOCIE-group + LOCIPCLR model). This killed
-# the ~1M/s IRQ storms the DMA/ADC samples used to trigger; no regression
-# (gpio_irq IRQ 33 still delivers per edge).
+# IRQ-delivery note (resolved an earlier misconception): the C SDK delivers local
+# IRQs >=32 by PER-IRQ mcause — the vector table sends mcause 26..31 to the LOCIE
+# group handlers but mcause 32+ to a shared default_local_interrupt_handler, whose
+# C dispatcher does `interrupt_number_get() = mcause & 0xFFF` and calls the per-IRQ
+# handler in the RAM exception table. There is NO LOCIPCLR in that path, so the HW
+# auto-clears LOCIPD on delivery. Our model matches this (mcause = IRQ number +
+# auto-clear-on-delivery), so NO LOCIE-group rework is needed and there is no
+# rs conflict. With that understood, the DMA sample was fixed by three concrete
+# model bugs (auto-clear, int_st int_trans_st[8:15], and the src/dest_inc bit
+# positions 26/27) — it now passes.
 #
-#   dma/watchdog - BLOCKED by the same root cause: the C SDK delivers local IRQs
-#              >=32 as LOCIE *group* interrupts (mcause = one of IRQ_LOCIE0..5 =
-#              26..31), and a software group handler reads LOCIPD and calls the
-#              per-IRQ handler in the RAM exception table, then LOCIPCLRs. Our model
-#              delivers mcause = the IRQ number directly, so e.g. the DMA-done
-#              IRQ 59 never reaches hal_dma_tc_isr -> its callback never sets
-#              g_dma_trans_done -> the single-transfer wait hangs. The watchdog's
-#              timeout interrupt has the same issue (plus no chip_core_irq entry).
-#              Real fix = deliver via the LOCIE-group model (mcause = group bit +
-#              LOCIPD so the group dispatcher runs). Sizeable target/riscv rework;
-#              must keep the rs per-IRQ path (gpio_irq) working too.
+#   watchdog - WDT_MODE_INTERRUPT wants a timeout interrupt -> "watchdog kick
+#              timeout!". The WDT (CHIP_WDT_BASE 0x40006000) has no chip_core_irq.h
+#              entry and watchdog_port_register_irq() is empty (irq_wdt_handler is
+#              wired to a fixed vector, likely the COP/NMI mcause 12). Our PK_WDT
+#              models reset-on-timeout, not the interrupt-then-reset path. Needs the
+#              WDT->NMI(12) route + interrupt-then-reset state machine.
 #   timer    - NOT a model gap. HW timer model is correct: channel 0 (IRQ 26, the
 #              LiteOS systick) fires fine (~2300 IRQ-26 in 8 s). The uapi_timer
 #              SOFTWARE-timer/task layer never reaches uapi_timer_start on
 #              TIMER_INDEX=1 (0 MMIO writes to timer+0x200) — a LiteOS task issue.
-#
-# Pattern: counter-read samples (tcxo/systick) pass; completion-driven samples need
-# either a deep per-peripheral state machine (adc, dma) or are blocked outside the
-# peripheral model (timer = LiteOS software-timer; watchdog = no clean IRQ route).
