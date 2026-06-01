@@ -45,5 +45,30 @@ while IFS='|' read -r elf to marker <&3; do
     fi
 done 3< "$MANIFEST"
 
+# --- NV / partition overlay check ----------------------------------------------
+# Boot a sample with the flash overlay (tests/csdk/flash/) and assert the C SDK's
+# partition + NV reads now succeed: the partition table resolves (so the
+# "[UPG] ...flash_start_addr fail" seen on an empty flash is GONE) and the firmware
+# still boots to the scheduler.
+FLASHMAN="$FIX/flash/manifest.txt"
+nvelf="$FIX/tcxo.elf"
+if [ -f "$FLASHMAN" ] && [ -f "$nvelf" ]; then
+    overlay=()
+    while IFS='|' read -r f a; do
+        case "${f// /}" in ''|\#*) continue;; esac
+        f="$(echo "$f" | xargs)"; a="$(echo "$a" | xargs)"
+        [ -f "$FIX/flash/$f" ] && overlay+=(-device "loader,file=$FIX/flash/$f,addr=$a")
+    done < "$FLASHMAN"
+    echo "==> NV overlay: expecting partition table to resolve (no UPG flash-addr fail)"
+    out="$(timeout 16 "$QEMU_BIN" -M ws63 -nographic -serial mon:stdio \
+           "${overlay[@]}" -kernel "$nvelf" </dev/null 2>/dev/null || true)"
+    if printf '%s' "$out" | grep -qa 'entering scheduler' \
+       && ! printf '%s' "$out" | grep -qa 'upg_get_upgrade_flag_flash_start_addr fail'; then
+        echo "    PASS"; pass=$((pass + 1))
+    else
+        echo "    FAIL — partition/NV overlay not effective"; fail=$((fail + 1))
+    fi
+fi
+
 echo "C SDK SAMPLE TESTS: $pass passed, $fail failed, $skip skipped"
 [ "$fail" -eq 0 ]

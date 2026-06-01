@@ -12,6 +12,9 @@
 #   ICOUNT=1      deterministic instruction-counted timing (`-icount shift=N`):
 #                 reproducible run-to-run, IPC=1 at ~250 MHz. NOT cycle-accurate.
 #   ICOUNT_SHIFT  override the shift (default 2 -> 4 ns/insn ~ 250 MHz; 3 -> 125 MHz)
+#   NV=1          back the flash XIP window with the partition table + NV images
+#                 (tests/csdk/flash/) so the C SDK's partition/NV reads succeed
+#                 (a -kernel boot otherwise skips flashboot and leaves flash empty)
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -34,6 +37,21 @@ if [ "${ICOUNT:-0}" != "0" ]; then
     SHIFT="${ICOUNT_SHIFT:-2}"
     ARGS+=(-icount "shift=$SHIFT")
     echo "==> deterministic timing: -icount shift=$SHIFT (~$((1000 / (1 << SHIFT))) MHz, IPC=1; not cycle-accurate)"
+fi
+if [ "${NV:-0}" != "0" ]; then
+    FLASH_DIR="${FLASH_DIR:-$HERE/tests/csdk/flash}"
+    MAN="$FLASH_DIR/manifest.txt"
+    if [ -f "$MAN" ]; then
+        while IFS='|' read -r file addr; do
+            case "${file// /}" in ''|\#*) continue;; esac
+            file="$(echo "$file" | xargs)"; addr="$(echo "$addr" | xargs)"
+            [ -f "$FLASH_DIR/$file" ] || continue
+            ARGS+=(-device "loader,file=$FLASH_DIR/$file,addr=$addr")
+            echo "==> flash overlay: $file @ $addr"
+        done < "$MAN"
+    else
+        echo "==> NV=1 but no flash manifest at $MAN" >&2
+    fi
 fi
 if [ "${DEBUG:-0}" = "1" ]; then
     ARGS+=(-d int,guest_errors,unimp -D "$HERE/qemu.log")

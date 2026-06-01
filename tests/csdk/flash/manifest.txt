@@ -1,0 +1,22 @@
+# Flash overlay for running fbb_ws63 C SDK firmware with working NV / partitions.
+# Each line: <file> | <XIP load address>
+#
+# A `-kernel` boot loads the app straight into RAM and skips the flashboot stage
+# that normally populates flash, so the flash XIP window (0x200000+) is empty and
+# the C SDK's partition table + NV reads fail ("[UPG] ...flash_start_addr fail",
+# "nv read sw fail"). Loading these images (via `scripts/run.sh NV=1`) backs the
+# flash so uapi_partition_get_info() + NV reads succeed — without touching the
+# app's own XIP region (~0x230300-0x294000).
+#
+#   partition_params.bin -> the params region; holds the partition table at
+#                           XIP 0x200380 (magic 0x4b87a54b).
+#   nv.bin / nv_factory.bin -> the software / factory NV key-value stores.
+#
+# Note: the per-chip factory-calibration keys (e.g. xo_trim crystal trim) are
+# written at production and are absent from any generic build NV, so a single
+# "xo_trim_temp_comp::nv read sw fail" remains by design — it is not a defect.
+#
+# file                 | addr
+partition_params.bin   | 0x200000
+nv.bin                 | 0x5FC000
+nv_factory.bin         | 0x20C000

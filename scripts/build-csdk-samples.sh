@@ -72,4 +72,12 @@ for s in "${SAMPLES[@]}"; do
   echo "   -> $FIX/$s.elf ($(du -h "$FIX/$s.elf" | cut -f1))"
 done
 
+# Refresh the NV / partition flash overlay (tests/csdk/flash/) from this build.
+FLDIR="$FIX/flash"
+mkdir -p "$FLDIR"
+cp_overlay() { [ -f "$1" ] && { cp "$1" "$FLDIR/$2"; echo "   overlay: $2 ($(du -h "$FLDIR/$2" | cut -f1))"; }; }
+cp_overlay "$SRC/output/ws63/acore/param_bin/root_params_sign.bin" partition_params.bin
+cp_overlay "$SRC/output/ws63/pktbin/ws63_all_nv.bin"               nv.bin
+cp_overlay "$SRC/output/ws63/pktbin/ws63_all_nv_factory.bin"       nv_factory.bin
+
 echo "done. Review tests/csdk/manifest.txt markers, then run scripts/csdk-test.sh."

@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Known gaps (sample builds but blocks on an unmodelled completion path, documented
   in `tests/csdk/manifest.txt`): `timer` (timer-completion IRQ), `dma` (LLI
   descriptor mode), `watchdog` (kick/feed timing), `adc` (conversion-done read).
+- **NV / partition flash overlay** (`scripts/run.sh NV=1` + `tests/csdk/flash/`).
+  A `-kernel` boot skips flashboot, so the flash XIP window is empty and the C SDK's
+  partition-table + NV reads fail. `NV=1` loads the partition table (`params`, table
+  magic `0x4b87a54b` @ XIP 0x200380) and the software/factory NV stores into flash —
+  outside the app's own XIP region — so `uapi_partition_get_info()` and NV reads
+  succeed (the "[UPG] ...flash_start_addr fail" messages go away). csdk-test.sh
+  asserts this. The per-chip factory-calibration keys (e.g. `xo_trim`) are written at
+  production and absent from any build NV, so that one read still reports — by design.
 
 ## [0.2.0] - 2026-06-01
 

@@ -93,7 +93,7 @@ HAL 的 TX 路径（`uart.rs` `write_byte`）：轮询 `FIFO_STATUS.tx_fifo_full
 | **TCXO 时钟/计数器** | ✅ 真实(部分) | `0x440004C0`：bit4 count-valid + 64 位单调计数（+0x04/+0x08），供 bootloader us 级延时 |
 | **PPB（核内私有外设总线）** | 🟡 RAM 吸收 | `0xE0000000` FlashPatch 单元 + Cortex-M 式 SCS（`0xE000E000`）；加载已打补丁镜像故补丁单元无意义 |
 | 中断控制器 | ✅ 真实 | IRQ 26–31（mie 类）+ ≥32（自定义 LOCIxx，target/riscv 补丁）均完整投递；`LOCIPRI` 优先级 + `PRITHD` 阈值已强制（严格 `>`、最高优先级优先、同级取小号）|
-| **SFC（Flash 控制器）** | ✅ 真实(部分) | SPI 命令接口（RDID→W25Q16、RDSR→ready、命令完成）；flash XIP 内容未回填 |
+| **SFC（Flash 控制器）** | ✅ 真实(部分) | SPI 命令接口（RDID→W25Q16、RDSR→ready、命令完成）；flash XIP 窗口（0x200000）为 RAM 背靠，默认空——可用 `run.sh NV=1` 回填分区表+NV（见下「NV 仿真」）|
 | **I2C0/1**（0x44018000/0x44018100）| ✅ **真实(行为完整)** | 真实回环 FIFO：TXR→RXR 多字节顺序回读、SR 完成位、COM 命令位自动清、IRQ 31/32 |
 | **SPI0/1**（0x44020000/0x44021000）| ✅ **真实(行为完整)** | 真实回环 FIFO：DR 写入→顺序读回、WSR 反映 FIFO（rxfne/txfe）、RLR 深度、IRQ 43/52 |
 | **PWM**（0x44024000）| ✅ 真实(部分) | 寄存器影子 + PERIODLOAD_FLAG=1 + START 自清 |
@@ -136,11 +136,27 @@ HAL 的 TX 路径（`uart.rs` `write_byte`）：轮询 `FIFO_STATUS.tx_fifo_full
 | C SDK 镜像 | 现状 | 边界 |
 |------------|------|------|
 | `flashboot` / `loaderboot`（bootloader，**零掩膜 ROM 依赖**）| ✅ 跑出 UART 输出（时钟 bring-up→flash init）| 下一阻塞 = SFC Flash 控制器（未建模，flash init 优雅失败不挂死）|
-| `ws63-liteos-app`（主应用，**裁剪 BT+WiFi**）| ✅ **稳定启动到调度器并空转运行**（`cpu 0 entering scheduler` + `radar_timer_init succ`，timer IRQ 26 周期触发，无崩溃）| 仅剩 flash/NV/efuse 内容相关的非致命 `fail` 打印（UPG/NV）；BT/WiFi 任务需子系统 ROM 数据/RF 硬件，已裁剪（`config.py` 注释 `BGLE/BTH/WIFI_TASK_EXIST`）|
+| `ws63-liteos-app`（主应用，**裁剪 BT+WiFi**）| ✅ **稳定启动到调度器并空转运行**（`cpu 0 entering scheduler` + `radar_timer_init succ`，timer IRQ 26 周期触发，无崩溃）| 加 `run.sh NV=1` 后分区表/NV 读取成功（UPG `flash_start_addr fail` 消除）；仅剩 `xo_trim` 出厂标定键（按芯片生产时烧录，任何构建 NV 都没有，固有）；BT/WiFi 任务需子系统 ROM 数据/RF 硬件，已裁剪（`config.py` 注释 `BGLE/BTH/WIFI_TASK_EXIST`）|
 | `ws63-liteos-app`（含 BT/WiFi）| ✅ 启动 LiteOS、创建全部 14 子系统任务、进入调度器 | `bt`/`wifi` 任务深层初始化崩于**ROM 数据墙**（vtable/NV/efuse/RF 标定无 dump）|
 
 构建 C SDK：`cd fbb_ws63/src && python3 build.py ws63-liteos-app -ninja`（厂商工具链已内置）。
 运行：`qemu-system-riscv32 -M ws63 -nographic -serial mon:stdio -kernel <image>.elf`。
+
+### NV 仿真（分区表 + NV 回填）
+`-kernel` 启动直接把 app 装入 RAM、**跳过 flashboot**（真机里 flashboot 负责把分区表/NV 写进 flash），
+所以 flash XIP 窗口（0x200000，RAM 背靠）默认是空的，C SDK 的 `uapi_partition_get_info()` / NV 读取失败
+（`[UPG] ...flash_start_addr fail`、`nv read sw fail`）。`scripts/run.sh NV=1` 用 `-device loader` 把
+**分区表 + NV** 回填进 flash（`tests/csdk/flash/`，见其 `manifest.txt`）：
+
+| 镜像 | XIP 地址 | 内容 |
+|------|----------|------|
+| `partition_params.bin` | 0x200000 | params 区，分区表在 0x200380（magic `0x4b87a54b`）|
+| `nv.bin` | 0x5FC000 | 软件 NV 键值区 |
+| `nv_factory.bin` | 0x20C000 | 出厂 NV 键值区 |
+
+三者都落在 app 自身 XIP 区（~0x230300–0x294000）**之外**，故不冲突。回填后分区表解析成功、NV 读取成功，
+UPG 的 `flash_start_addr fail` 消除（`scripts/csdk-test.sh` 断言此点）。**唯一残留**：`xo_trim`
+（晶振温补标定）等**逐芯片出厂标定键**——生产时烧录，任何构建产物的 NV 都不含，固有缺失、非缺陷。
 
 ## 可观察的验证目标（均已实测 PASS，见 `scripts/smoke-test.sh`）
 
