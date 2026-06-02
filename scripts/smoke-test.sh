@@ -223,5 +223,21 @@ else
     echo "==> async_delay: SKIP (build it: cargo build -p async_delay --release)"
 fi
 
+# ---- embassy_multitask: embassy-executor + embassy-time on the WS63 time-driver ----
+EMB_ELF="$TARGET_DIR/embassy_multitask"
+if [ -f "$EMB_ELF" ]; then
+    echo "==> embassy_multitask: expecting 2 embassy-time tasks (TCXO now() + TIMER alarm)"
+    timeout 8 "$QEMU_BIN" -M ws63 -nographic -serial mon:stdio \
+        -kernel "$EMB_ELF" </dev/null >"$TMP/emb.out" 2>/dev/null || true
+    if grep -q "EMBASSY MULTITASK: PASS" "$TMP/emb.out"; then
+        echo "    PASS: $(grep -c '\[fast\] tick' "$TMP/emb.out") fast + $(grep -c '\[slow\] tick' "$TMP/emb.out") slow ticks (embassy-time scheduled)"
+    else
+        echo "    FAIL: embassy multitask not confirmed. Got:"; tail -5 "$TMP/emb.out" | sed 's/^/      /'
+        fail=1
+    fi
+else
+    echo "==> embassy_multitask: SKIP (build it: cargo build -p embassy_multitask --release)"
+fi
+
 [ "$fail" -eq 0 ] && echo "SMOKE TEST: PASS" || echo "SMOKE TEST: FAIL"
 exit "$fail"
