@@ -89,12 +89,14 @@ BLINKY_ELF="$TARGET_DIR/blinky"
 if [ -f "$BLINKY_ELF" ]; then
     echo "==> blinky: expecting GPIO0 (0x44028xxx) writes + no illegal-instruction traps"
     timeout 3 "$QEMU_BIN" -M ws63 -nographic -serial mon:stdio \
-        -d int,unimp,guest_errors -D "$TMP/blinky.log" \
+        -d int,unimp,guest_errors,trace:ws63_gpio_set,trace:ws63_gpio_clr \
+        -D "$TMP/blinky.log" \
         -kernel "$BLINKY_ELF" >/dev/null 2>&1
     traps=$(grep -c illegal_instruction "$TMP/blinky.log" 2>/dev/null)
-    # GPIO is a real device now; it logs output changes via qemu_log (-d on).
-    gpio=$(grep -c 'ws63-gpio: \(SET\|CLR\)' "$TMP/blinky.log" 2>/dev/null)
-    toggled=$(grep -c 'ws63-gpio: SET -> out=0x00000001' "$TMP/blinky.log" 2>/dev/null)
+    # GPIO is a real device; output changes now emit proper trace events
+    # (ws63_gpio_set / ws63_gpio_clr), enabled above via -d trace:.
+    gpio=$(grep -cE 'ws63_gpio_(set|clr) ' "$TMP/blinky.log" 2>/dev/null)
+    toggled=$(grep -c 'ws63_gpio_set GPIO DATA_SET out=0x00000001' "$TMP/blinky.log" 2>/dev/null)
     traps=${traps:-0}
     gpio=${gpio:-0}
     toggled=${toggled:-0}
@@ -170,6 +172,23 @@ if [ -f "$SCHED_ELF" ]; then
     fi
 else
     echo "==> sched_selftest: SKIP (build it: cargo build -p ws63-rf-rs --example sched_selftest --release)"
+fi
+
+# ---- semihost_selftest: pass/fail via the QEMU exit code (no UART scraping) ----
+SEMI_ELF="$TARGET_DIR/semihost_selftest"
+if [ -f "$SEMI_ELF" ]; then
+    echo "==> semihost_selftest: expecting QEMU to exit 0 via RISC-V semihosting SYS_EXIT"
+    timeout 5 "$QEMU_BIN" -M ws63 -nographic -semihosting \
+        -kernel "$SEMI_ELF" </dev/null >"$TMP/semi.out" 2>&1
+    ec=$?
+    if [ "$ec" -eq 0 ]; then
+        echo "    PASS: exit code 0 ($(grep -m1 semihost_selftest "$TMP/semi.out" 2>/dev/null))"
+    else
+        echo "    FAIL: exit code $ec. Got:"; head -4 "$TMP/semi.out" | sed 's/^/      /'
+        fail=1
+    fi
+else
+    echo "==> semihost_selftest: SKIP (build it: cargo build -p semihost_selftest --release)"
 fi
 
 [ "$fail" -eq 0 ] && echo "SMOKE TEST: PASS" || echo "SMOKE TEST: FAIL"

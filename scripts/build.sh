@@ -42,6 +42,10 @@ if ! grep -q "ws63_locipd" "$QEMU_DIR/target/riscv/cpu_helper.c"; then
     git -C "$QEMU_DIR" apply "$HERE/patches/ws63-target-riscv.patch"
 fi
 
+# 2c. inject the qtest (register-level, boot-free regression of the WS63 models)
+echo "==> injecting tests/qtest/ws63-test.c"
+cp "$HERE/src/tests/qtest/ws63-test.c" "$QEMU_DIR/tests/qtest/ws63-test.c"
+
 # 3. register in the meson source set (before the 'hw_arch +=' line)
 MB="$QEMU_DIR/hw/riscv/meson.build"
 if ! grep -q "CONFIG_WS63" "$MB"; then
@@ -63,6 +67,29 @@ config WS63
 EOF
 fi
 
+# 4a. append the WS63 trace events to hw/riscv/trace-events (the dir already has
+#     one for riscv-iommu; APPEND, never overwrite, or other riscv machines lose
+#     their events). meson regenerates hw/riscv/trace.h from this. Idempotent.
+TE="$QEMU_DIR/hw/riscv/trace-events"
+if ! grep -q "ws63_gpio_set" "$TE"; then
+    echo "==> appending WS63 trace events to $TE"
+    cat >> "$TE" <<'EOF'
+
+# --- HiSilicon WS63 SoC model (ws63.c) ---
+ws63_gpio_set(uint32_t out) "GPIO DATA_SET out=0x%08x"
+ws63_gpio_clr(uint32_t out) "GPIO DATA_CLR out=0x%08x"
+ws63_dma_xfer(int ch, unsigned fc, unsigned sper, unsigned dper, uint32_t src, uint32_t dst, unsigned items, unsigned width) "DMA ch%d fc=%u sper=%u dper=%u src=0x%08x dst=0x%08x items=%u width=%u"
+EOF
+fi
+
+# 4b. register the qtest in qtests_riscv32 (idempotent). Prepends 'ws63-test'
+#     to the list so meson builds tests/qtest/ws63-test from the injected source.
+QM="$QEMU_DIR/tests/qtest/meson.build"
+if ! grep -q "ws63-test" "$QM"; then
+    echo "==> registering ws63-test in $QM"
+    sed -i "s#^qtests_riscv32 = \\\\#qtests_riscv32 = ['ws63-test'] + \\\\#" "$QM"
+fi
+
 # 5. configure (once)
 if [ ! -f "$QEMU_DIR/build/build.ninja" ]; then
     echo "==> configuring (riscv32-softmmu only)"
@@ -70,9 +97,12 @@ if [ ! -f "$QEMU_DIR/build/build.ninja" ]; then
         --disable-werror --disable-docs)
 fi
 
-# 6. build
+# 6. build the emulator, then the WS63 qtest binary (ninja picks up the
+#    meson.build edit above and regenerates before building the target).
 echo "==> building qemu-system-riscv32 (-j$JOBS)"
 (cd "$QEMU_DIR" && make -j"$JOBS" qemu-system-riscv32)
+echo "==> building tests/qtest/ws63-test (-j$JOBS)"
+(cd "$QEMU_DIR/build" && ninja -j"$JOBS" tests/qtest/ws63-test)
 
 BIN="$QEMU_DIR/build/qemu-system-riscv32"
 echo "==> done: $BIN"

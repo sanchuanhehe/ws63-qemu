@@ -69,6 +69,7 @@ CLDO_CRG 只被写不读关键位，吸收即可。
 ## CPU
 
 - 真实芯片：**RV32IMFC_Zicsr**（硬件单精度浮点 `ilp32f`，**无原子扩展 A**），240 MHz，单 hart。
-- QEMU 用可配置的 `rv32` 基础核，**精确设为 I/M/F/C，关闭 A、D、zawrs**——与 WS63 ISA 完全一致
-  （非超集）。复位 PC = ELF entry（`0x0023_0300`），无 OpenSBI / 无 FDT（裸机）。
+- QEMU 用命名 CPU `-cpu ws63`（默认型号），**= I/M/F/C + Zicsr/Zcf，关闭 A、D，无 MMU**——与 WS63 ISA
+  完全一致（非超集；Zcb/Zcmp 禁用以让位 xlinx 自定义压缩编码）。复位 PC = ELF entry（`0x0023_0300`），
+  无 OpenSBI / 无 FDT（裸机）。
   注：`zawrs` 在基础核默认开启且依赖 A，故一并关闭以保持 A 关闭。

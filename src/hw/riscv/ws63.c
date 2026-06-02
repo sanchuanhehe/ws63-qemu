@@ -48,6 +48,7 @@
 #include "sysemu/runstate.h"
 #include "exec/address-spaces.h"
 #include "elf.h"
+#include "trace.h"     /* generated from hw/riscv/trace-events (ws63_* events) */
 
 /* ----------------------------------------------------------------------------
  * Memory map — from ws63-rt/memory.x, which is a faithful transcription of the
@@ -807,12 +808,12 @@ static void ws63_gpio_write(void *opaque, hwaddr off, uint64_t val,
         break;
     case 0x30: /* DATA_SET (w1s) */
         s->out |= (uint32_t)val;
-        qemu_log("ws63-gpio: SET -> out=0x%08x\n", s->out);
+        trace_ws63_gpio_set(s->out);
         ws63_gpio_eval(s, old_eff);
         break;
     case 0x34: /* DATA_CLR (w1c) */
         s->out &= ~(uint32_t)val;
-        qemu_log("ws63-gpio: CLR -> out=0x%08x\n", s->out);
+        trace_ws63_gpio_clr(s->out);
         ws63_gpio_eval(s, old_eff);
         break;
     default: break;
@@ -1208,9 +1209,7 @@ static void ws63_dma_run(WS63PeriphState *s, int ch)
      * handshaking is modelled as "every queued beat is serviced" (functional,
      * not cycle-accurate request pacing).
      */
-    qemu_log("ws63-dma: ch%d fc=%u sper=%u dper=%u %s%08x -> %s%08x x%u w%u\n",
-             ch, fc, sper, dper, sinc ? " " : "[", src, dinc ? " " : "[",
-             dst, count, w);
+    trace_ws63_dma_xfer(ch, fc, sper, dper, src, dst, count, w);
 
     for (i = 0; i < count; i++) {
         uint8_t b[8] = {0};
@@ -1783,23 +1782,16 @@ static void ws63_machine_init(MachineState *machine)
         entry = elf_entry;
     }
 
-    /* Single RV32IMFC_Zicsr hart (I/M/F/C; A/D/zawrs off). */
-    object_initialize_child(OBJECT(machine), "cpu", &s->cpu, machine->cpu_type);
-    object_property_set_bool(OBJECT(&s->cpu), "i", true, &error_abort);
-    object_property_set_bool(OBJECT(&s->cpu), "m", true, &error_abort);
-    object_property_set_bool(OBJECT(&s->cpu), "f", true, &error_abort);
-    object_property_set_bool(OBJECT(&s->cpu), "c", true, &error_abort);
-    object_property_set_bool(OBJECT(&s->cpu), "a", false, &error_abort);
-    object_property_set_bool(OBJECT(&s->cpu), "d", false, &error_abort);
-    object_property_set_bool(OBJECT(&s->cpu), "zawrs", false, &error_abort);
     /*
-     * The WS63 "riscv31" core uses HiSilicon custom "xlinx" code-size
-     * instructions (push/pop/popret, uxtb/uxth) that occupy the same
-     * compressed-encoding space (funct3=100) as standard Zcb/Zcmp but with a
-     * different bit layout. They are decoded in target/riscv/trans_xlinx.c.inc,
-     * so we must NOT enable Zcb/Zcmp/Zcmt (that would mis-decode them). Zcf
-     * (compressed float load/store) lives in a disjoint space and is kept. */
-    object_property_set_bool(OBJECT(&s->cpu), "zcf", true, &error_abort);
+     * Single RV32IMFC_Zicsr hart. The ISA is baked into the named `ws63` CPU
+     * type (target/riscv/cpu.c:rv32_ws63_cpu_init, the default_cpu_type below):
+     * I/M/F/C + Zicsr/Zifencei/Zicntr + Zcf, no A/D, no MMU, and deliberately no
+     * Zca/Zcb/Zcmp/Zcmt (the HiSilicon "xlinx" custom code-size instructions own
+     * that compressed encoding space; see trans_xlinx.c.inc). Using the named
+     * type instead of poking the configurable base CPU's per-letter properties
+     * keeps machine init working under -accel qtest, which doesn't expose them.
+     */
+    object_initialize_child(OBJECT(machine), "cpu", &s->cpu, machine->cpu_type);
     qdev_prop_set_uint64(DEVICE(&s->cpu), "resetvec", entry);
     s->cpu.env.mhartid = 0;
     qemu_register_reset(ws63_cpu_reset, &s->cpu);
@@ -1815,7 +1807,7 @@ static void ws63_machine_class_init(ObjectClass *oc, void *data)
     mc->desc = "HiSilicon WS63 (RV32IMFC Wi-Fi6/BLE/SLE SoC)";
     mc->init = ws63_machine_init;
     mc->max_cpus = 1;
-    mc->default_cpu_type = TYPE_RISCV_CPU_BASE32;
+    mc->default_cpu_type = TYPE_RISCV_CPU_WS63;
     mc->default_ram_id = "ws63.sram";
     mc->default_ram_size = WS63_SRAM_SIZE;
 }

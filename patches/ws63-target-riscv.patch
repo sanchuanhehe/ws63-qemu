@@ -1,8 +1,57 @@
+diff --git a/target/riscv/cpu-qom.h b/target/riscv/cpu-qom.h
+index 6211537..880442b 100644
+--- a/target/riscv/cpu-qom.h
++++ b/target/riscv/cpu-qom.h
+@@ -49,6 +49,7 @@
+ #define TYPE_RISCV_CPU_SIFIVE_U54       RISCV_CPU_TYPE_NAME("sifive-u54")
+ #define TYPE_RISCV_CPU_THEAD_C906       RISCV_CPU_TYPE_NAME("thead-c906")
+ #define TYPE_RISCV_CPU_VEYRON_V1        RISCV_CPU_TYPE_NAME("veyron-v1")
++#define TYPE_RISCV_CPU_WS63             RISCV_CPU_TYPE_NAME("ws63")
+ #define TYPE_RISCV_CPU_HOST             RISCV_CPU_TYPE_NAME("host")
+ 
+ OBJECT_DECLARE_CPU_TYPE(RISCVCPU, RISCVCPUClass, RISCV_CPU)
 diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
-index 261db87..4b4c3ba 100644
+index 261db87..bc45ac5 100644
 --- a/target/riscv/cpu.c
 +++ b/target/riscv/cpu.c
-@@ -942,6 +942,14 @@ static void riscv_cpu_reset_hold(Object *obj, ResetType type)
+@@ -708,6 +708,36 @@ static void rv32_imafcu_nommu_cpu_init(Object *obj)
+     cpu->cfg.pmp = true;
+ }
+ 
++/*
++ * HiSilicon WS63 "riscv31" application core: RV32IMFC_Zicsr, hard-float ilp32f,
++ * no A (atomics), no MMU. Presets the exact ISA the hw/riscv/ws63 machine needs
++ * so `-cpu ws63` works, and so machine init need not poke the configurable
++ * CPU's per-letter properties (those are unavailable under -accel qtest).
++ *
++ * Zcf (compressed float load/store) is enabled; Zca/Zcb/Zcmp/Zcmt are NOT — the
++ * HiSilicon "xlinx" custom code-size instructions (push/pop/popret, uxtb/uxth)
++ * occupy that compressed (funct3=100) encoding space and are decoded in
++ * target/riscv/insn_trans/trans_xlinx.c.inc; enabling Zcb/Zcmp would mis-decode
++ * them. Zicntr is kept for rdcycle/rdtime used by firmware timing loops.
++ */
++static void rv32_ws63_cpu_init(Object *obj)
++{
++    CPURISCVState *env = &RISCV_CPU(obj)->env;
++    RISCVCPU *cpu = RISCV_CPU(obj);
++
++    riscv_cpu_set_misa_ext(env, RVI | RVM | RVF | RVC);
++    env->priv_ver = PRIV_VERSION_LATEST;
++#ifndef CONFIG_USER_ONLY
++    set_satp_mode_max_supported(cpu, VM_1_10_MBARE);
++#endif
++
++    cpu->cfg.ext_zicsr = true;
++    cpu->cfg.ext_zifencei = true;
++    cpu->cfg.ext_zicntr = true;
++    cpu->cfg.ext_zcf = true;
++    cpu->cfg.pmp = true;
++}
++
+ static void rv32i_bare_cpu_init(Object *obj)
+ {
+     CPURISCVState *env = &RISCV_CPU(obj)->env;
+@@ -942,6 +972,14 @@ static void riscv_cpu_reset_hold(Object *obj, ResetType type)
      env->misa_mxl = mcc->misa_mxl_max;
      env->priv = PRV_M;
      env->mstatus &= ~(MSTATUS_MIE | MSTATUS_MPRV);
@@ -17,6 +66,14 @@ index 261db87..4b4c3ba 100644
      if (env->misa_mxl > MXL_RV32) {
          /*
           * The reset status of SXL/UXL is undefined, but mstatus is WARL
+@@ -2969,6 +3007,7 @@ static const TypeInfo riscv_cpu_type_infos[] = {
+     DEFINE_VENDOR_CPU(TYPE_RISCV_CPU_SIFIVE_E31, MXL_RV32,  rv32_sifive_e_cpu_init),
+     DEFINE_VENDOR_CPU(TYPE_RISCV_CPU_SIFIVE_E34, MXL_RV32,  rv32_imafcu_nommu_cpu_init),
+     DEFINE_VENDOR_CPU(TYPE_RISCV_CPU_SIFIVE_U34, MXL_RV32,  rv32_sifive_u_cpu_init),
++    DEFINE_VENDOR_CPU(TYPE_RISCV_CPU_WS63,       MXL_RV32,  rv32_ws63_cpu_init),
+     DEFINE_BARE_CPU(TYPE_RISCV_CPU_RV32I,        MXL_RV32,  rv32i_bare_cpu_init),
+     DEFINE_BARE_CPU(TYPE_RISCV_CPU_RV32E,        MXL_RV32,  rv32e_bare_cpu_init),
+ #endif
 diff --git a/target/riscv/cpu.h b/target/riscv/cpu.h
 index 77e7e98..00cfe38 100644
 --- a/target/riscv/cpu.h
@@ -514,65 +571,3 @@ index 803d874..97e2715 100644
      bool s_injected = env->mvip & (1ULL << cause) & env->mvien &&
          !(env->mip & (1ULL << cause));
      bool vs_injected = env->hvip & (1ULL << cause) & env->hvien &&
-diff --git a/target/riscv/translate.c b/target/riscv/translate.c
-index bccaf8e..ad390ab 100644
---- a/target/riscv/translate.c
-+++ b/target/riscv/translate.c
-@@ -1163,14 +1163,24 @@ static uint32_t opcode_at(DisasContextBase *dcbase, target_ulong pc)
- #include "insn_trans/trans_rvzcmop.c.inc"
- #include "insn_trans/trans_rvzicfiss.c.inc"
- 
-+/* HiSilicon WS63 "xlinx" custom instruction extensions (must follow
-+ * trans_rvzce.c.inc: reuses decode_push_pop_list). */
-+#include "insn_trans/trans_xlinx.c.inc"
-+
- /* Include decoders for factored-out extensions */
- #include "decode-XVentanaCondOps.c.inc"
- 
--/* The specification allows for longer insns, but not supported by qemu. */
--#define MAX_INSN_LEN  4
-+/*
-+ * The specification allows for longer insns, but only the WS63 "xlinx"
-+ * 48-bit l.li is supported by qemu here (marker 0x1f in bits[5:0]).
-+ */
-+#define MAX_INSN_LEN  6
- 
- static inline int insn_len(uint16_t first_word)
- {
-+    if ((first_word & 0x3f) == 0x1f) {
-+        return 6; /* xlinx 48-bit (l.li) */
-+    }
-     return (first_word & 3) == 3 ? 4 : 2;
- }
- 
-@@ -1197,7 +1207,11 @@ static void decode_opc(CPURISCVState *env, DisasContext *ctx, uint16_t opcode)
-             decode_insn16(ctx, opcode)) {
-             return;
-         }
--    } else {
-+        /* WS63 xlinx 16-bit (push/pop/popret, uxtb/uxth) */
-+        if (decode_xlinx16(ctx, opcode)) {
-+            return;
-+        }
-+    } else if (ctx->cur_insn_len == 4) {
-         uint32_t opcode32 = opcode;
-         opcode32 = deposit32(opcode32, 16, 16,
-                              translator_lduw(env, &ctx->base,
-@@ -1210,6 +1224,17 @@ static void decode_opc(CPURISCVState *env, DisasContext *ctx, uint16_t opcode)
-                 return;
-             }
-         }
-+        /* WS63 xlinx 32-bit (*shf, b*i, muliadd, jal16/j16) */
-+        if (decode_xlinx32(ctx, opcode32)) {
-+            return;
-+        }
-+    } else { /* ctx->cur_insn_len == 6: WS63 xlinx 48-bit (l.li) */
-+        uint16_t hw1 = translator_lduw(env, &ctx->base, ctx->base.pc_next + 2);
-+        uint16_t hw2 = translator_lduw(env, &ctx->base, ctx->base.pc_next + 4);
-+        ctx->opcode = opcode | ((uint32_t)hw1 << 16);
-+        if (decode_xlinx48(ctx, opcode, hw1 | ((uint32_t)hw2 << 16))) {
-+            return;
-+        }
-     }
- 
-     gen_exception_illegal(ctx);

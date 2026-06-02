@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Phase 1 test/dev infrastructure complete** (ROADMAP §1):
+  - **qtest** (`tests/qtest/ws63-test.c`, run via `scripts/qtest.sh`, in CI) — a
+    register-level, boot-free regression that drives the GPIO/UART/timer/INTC/DMA
+    models directly over MMIO via libqtest. 4 cases: GPIO DATA set/clr/OEN/INT-EN
+    read-back; UART FIFO/line-status reset values; timer load/enable/fire with
+    delivery into the INTC (IRQ 26, observed via `qtest_irq_intercept_in`); DMA
+    channel-0 mem→mem block copy + raw completion status. Injected + meson-registered
+    by `scripts/build.sh`.
+  - **`-cpu ws63`** named CPU (`target/riscv` patch): RV32IMFC_Zicsr + Zcf, no A/D,
+    no MMU, Zcb/Zcmp deliberately disabled (the xlinx custom code-size insns own that
+    compressed encoding). It is now the machine's `default_cpu_type`, so machine init
+    no longer pokes the configurable CPU's per-letter properties — which also makes the
+    machine initialise under `-accel qtest` (that accel doesn't expose those properties).
+  - **Semihosting pass/fail** — `scripts/run.sh SEMIHOST=1` adds `-semihosting`; the
+    ws63-rs `semihost_selftest` example reports its result via the RISC-V semihosting
+    `SYS_EXIT_EXTENDED` exit code (and `SYS_WRITE0` console), so CI gets pass/fail
+    without scraping UART (`scripts/smoke-test.sh` asserts exit code 0).
+  - **GPIO/DMA trace events** — the temporary GPIO `qemu_log` calls became proper
+    `hw/riscv/trace-events` events (`ws63_gpio_set` / `ws63_gpio_clr` / `ws63_dma_xfer`),
+    enabled selectively with `-d trace:ws63_gpio_*`. `build.sh` appends them to the
+    upstream `hw/riscv/trace-events`; `smoke-test.sh`'s blinky check uses them.
 - **System-reset model** (SYS_CTL0 handler). GLB_CTL_M's chip-reset trigger
   (`0x40002110` bit 2) now issues `qemu_system_reset_request`, and the reset-reason
   history record (`SYS_RST_RECORD_0` @ `0x400000A0`, cleared via `SYS_DIAG_CLR_1` @

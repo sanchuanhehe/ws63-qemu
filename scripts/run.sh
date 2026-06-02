@@ -15,6 +15,10 @@
 #   NV=1          back the flash XIP window with the partition table + NV images
 #                 (tests/csdk/flash/) so the C SDK's partition/NV reads succeed
 #                 (a -kernel boot otherwise skips flashboot and leaves flash empty)
+#   SEMIHOST=1    enable RISC-V semihosting (-semihosting): firmware can call
+#                 SYS_EXIT to set the QEMU process exit code (pass/fail for CI
+#                 without UART scraping) and SYS_WRITE0 to print to the console.
+#                 See ws63-rs ws63-examples/semihost_selftest.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -52,6 +56,10 @@ if [ "${NV:-0}" != "0" ]; then
     else
         echo "==> NV=1 but no flash manifest at $MAN" >&2
     fi
+fi
+if [ "${SEMIHOST:-0}" != "0" ]; then
+    ARGS+=(-semihosting)
+    echo "==> semihosting enabled (firmware SYS_EXIT sets the QEMU exit code)"
 fi
 if [ "${DEBUG:-0}" = "1" ]; then
     ARGS+=(-d int,guest_errors,unimp -D "$HERE/qemu.log")

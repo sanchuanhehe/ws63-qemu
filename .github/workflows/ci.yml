@@ -21,7 +21,9 @@ jobs:
         uses: actions/cache@v5
         with:
           path: qemu
-          key: qemu-${{ env.QEMU_TAG }}-${{ hashFiles('src/hw/riscv/ws63.c') }}-${{ runner.os }}
+          # Invalidate on any overlay source, the target/riscv patch, or build.sh
+          # (all feed scripts/build.sh: ws63.c, trans_xlinx, the qtest, trace events).
+          key: qemu-${{ env.QEMU_TAG }}-${{ hashFiles('src/**', 'patches/**', 'scripts/build.sh') }}-${{ runner.os }}
 
       - name: Build qemu-system-riscv32 with the WS63 machine
         run: bash scripts/build.sh
@@ -56,3 +58,8 @@ jobs:
       # real vendor firmware. No SDK/toolchain needed (uses prebuilt fixtures).
       - name: C SDK peripheral-sample tests
         run: bash scripts/csdk-test.sh
+
+      # Register-level, boot-free regression of the GPIO/UART/timer/INTC/DMA
+      # models (drives MMIO directly via libqtest). Built by scripts/build.sh.
+      - name: QTest (register-level regression)
+        run: bash scripts/qtest.sh

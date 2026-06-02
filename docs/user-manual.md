@@ -148,6 +148,7 @@ IRQ 53)。`mon:` 表示同一通道复用 QEMU monitor(`Ctrl-A C` 切换)。
 | `ICOUNT=1` | **确定性指令计时**(`-icount shift=2`,约 250 MHz、IPC=1):同一固件每次运行计时**完全一致**。**非**周期精确 |
 | `ICOUNT_SHIFT=N` | 改 icount shift(默认 2→4 ns/insn≈250 MHz;3→125 MHz)|
 | `NV=1` | 用分区表 + NV 镜像(`tests/csdk/flash/`)回填 flash XIP 窗口,使 C SDK 的分区/NV 读取成功(见[§三](#三使用注意事项重要))|
+| `SEMIHOST=1` | 加 `-semihosting`:固件可用 RISC-V semihosting `SYS_EXIT` 设置 QEMU **进程退出码**(CI 免解析 UART 即得 pass/fail)、`SYS_WRITE0` 打印到控制台。见 ws63-rs `ws63-examples/semihost_selftest` |
 
 路径相关变量:`QEMU_DIR` / `QEMU_BIN`(仿真器位置)、`WS63_RS`(取默认 blinky ELF 用的 ws63-rs 路径,默认 `../ws63-rs`)、
 `FLASH_DIR`(NV overlay 目录)。
@@ -181,6 +182,20 @@ riscv32-unknown-elf-gdb fw.elf   # 或 gdb-multiarch
 - `DEBUG=1`(见上)或手动 `-d int,unimp,guest_errors -D qemu.log`。
 - `-d unimp`:打印对**未建模/兜底**外设的访问(按地址定位)。
 - `-d int`:打印每次中断投递(确认 IRQ 号/向量)。
+- `-d trace:ws63_gpio_*`:WS63 模型的正规 trace 事件——`ws63_gpio_set` / `ws63_gpio_clr`
+  (GPIO 输出变化)、`ws63_dma_xfer`(DMA 搬运)。也可 `-trace ws63_dma_xfer` 等单独开启。
+
+### 2.5 寄存器级 qtest(免启动回归)
+
+`scripts/qtest.sh` 用 libqtest **直接驱动外设寄存器**(测试进程扮演 CPU 角色,**不启动固件**),
+毫秒级验证 GPIO/UART/timer/INTC/DMA 模型的寄存器语义。与 `smoke-test.sh`(整机启动真实固件)互补。
+
+```bash
+bash scripts/qtest.sh          # 构建 tests/qtest/ws63-test 并运行(4 例,TAP 输出)
+```
+
+覆盖:GPIO 数据 set/clr/OEN/INT-EN 读写;UART FIFO/行状态复位值;timer 装载/使能/触发 +
+经 INTC 投递 IRQ 26(`qtest_irq_intercept_in`);DMA 通道 0 mem→mem 搬运 + 完成位。
 
 ---
 
@@ -228,7 +243,8 @@ riscv32-unknown-elf-gdb fw.elf   # 或 gdb-multiarch
 1. 构建 `qemu-system-riscv32`(带 WS63 机器);
 2. **机器注册** sanity(`-M help` 含 ws63);
 3. **ws63-rs 冒烟**(`smoke-test.sh`,见§4.2);
-4. **C SDK 外设样例**(`csdk-test.sh`,见§4.3,**5/5**)。
+4. **C SDK 外设样例**(`csdk-test.sh`,见§4.3,**5/5**);
+5. **寄存器级 qtest**(`qtest.sh`,免启动驱动 GPIO/UART/timer/INTC/DMA,**4/4**,见§2.5)。
 
 `release.yml`(打 `v*` tag 时)额外做全新构建 + 冒烟,然后发布二进制。v0.3.0 的三个 workflow(ci×2 + release)均 ✅。
 
@@ -242,6 +258,12 @@ riscv32-unknown-elf-gdb fw.elf   # 或 gdb-multiarch
 | `uart_hello` | 自定义 UART0 TX | 串口打印 `Hello from WS63 on QEMU!` |
 | `timer_irq` | TIMER_0→**IRQ 26**→ISR(mie 类中断)| 串口 `timer irq #N` 递增 + `OK: timer interrupts delivered` |
 | `gpio_irq` | GPIO0→**IRQ 33**→ISR(**≥32 自定义本地中断**)| 串口 `gpio irq #N` + `OK: custom local IRQ (>=32) delivered` |
+| `reset_demo` | `software_reset()` + `reset_reason()` 往返 | 重启 ≥2 次 + `OK: software reset observed`(reset_reason=Software)|
+| `dma_loopback` | mem↔SPI0 外设 DMA + SDMA 通道 | `DMA LOOPBACK TEST: PASS` |
+| `wifi_blob_link` | 链接 `libwifi_rom_data.a` + 重定位 | `BLOB LINK SPIKE: PASS` |
+| `rf_port_demo` | ws63-rf-rs porting 层 + blob 经其链接 | `RF PORT DEMO: PASS` |
+| `sched_selftest` | ws63-rf-rs 协作调度器(上下文切换 + 信号量)| `SCHED SELFTEST: PASS` |
+| `semihost_selftest` | semihosting 退出码(M/F/Zicsr 自检)| **QEMU 退出码 0**(免解析 UART;见§2.2 `SEMIHOST`)|
 
 ### 4.3 C SDK 外设样例
 
