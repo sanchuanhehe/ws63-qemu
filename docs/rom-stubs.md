@@ -109,8 +109,10 @@ ROM 里不仅有**代码**(可在宿主 C 里仿真),还有**数据**(vtable 数
 - **看哪些 ROM 地址被调到**:在 `ws63_rom_call` 顶部临时 `fprintf(stderr, "ROM pc=0x%x\n", pc)`(注意 `*printf_s`
   会很吵,按地址区间过滤)。
 - **加一个仿真**:在 `ws63_rom_call` 的 `switch` 里按地址加 `case`,从 `a0..a7`(`gpr[10..17]`)取参,设 `ret`。
-- **改完 target/riscv**:`git -C qemu diff target/riscv/... > patches/ws63-target-riscv.patch` 重新生成补丁,
-  再 `scripts/build.sh`。
+- **改完 target/riscv**:`git -C qemu diff -- target/riscv/ > patches/ws63-target-riscv.patch` 重新生成补丁,
+  再 `scripts/build.sh`。**务必 diff 整个 `target/riscv/` 目录**——只列部分文件会漏掉如 `translate.c`
+  (xlinx 解码 hook)这类 hunk,全新克隆套用残缺补丁后无法解码 xlinx、C SDK 固件零输出。生成后用
+  `git apply --check` 对 pristine 验证可干净套用。
 
 > 相关:整体设计见 [`docs/design.md`](design.md);C SDK 外设样例测试见
 > [`tests/csdk/manifest.txt`](../tests/csdk/manifest.txt);变更见 [`CHANGELOG.md`](../CHANGELOG.md)。
