@@ -303,5 +303,24 @@ else
     echo "==> i2c_scan: SKIP (build it: cargo build -p i2c_scan --release)"
 fi
 
+# ---- net_ping: connectivity base — smoltcp over the synthetic MAC + SLIRP ----
+# The only example needing a netdev: `-nic user` gives it the SLIRP NAT. It
+# ARP-resolves the gateway (10.0.2.2), ICMP-pings it (SLIRP answers locally — no
+# external network), and sends a UDP datagram; RX is delivered via WLMAC IRQ 45.
+NETP_ELF="$TARGET_DIR/net_ping"
+if [ -f "$NETP_ELF" ]; then
+    echo "==> net_ping: expecting ICMP echo reply over ws63-netmac + SLIRP (WLMAC IRQ 45)"
+    timeout 12 "$QEMU_BIN" -M ws63 -nographic -serial mon:stdio -nic user \
+        -kernel "$NETP_ELF" </dev/null >"$TMP/netp.out" 2>/dev/null || true
+    if grep -q "NET PING: PASS" "$TMP/netp.out"; then
+        echo "    PASS: $(grep -c 'reply seq=' "$TMP/netp.out") ICMP echo reply, $(grep -m1 'rx irq hits' "$TMP/netp.out" | sed 's/[[:space:]]*=[[:space:]]*/=/')"
+    else
+        echo "    FAIL: no echo reply over SLIRP. Got:"; tail -5 "$TMP/netp.out" | sed 's/^/      /'
+        fail=1
+    fi
+else
+    echo "==> net_ping: SKIP (build it: cargo build -p net_ping --release)"
+fi
+
 [ "$fail" -eq 0 ] && echo "SMOKE TEST: PASS" || echo "SMOKE TEST: FAIL"
 exit "$fail"

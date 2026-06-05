@@ -43,7 +43,7 @@ jobs:
           tar xzf ws63-rust-1.96.0-x86_64-unknown-linux-gnu.tar.gz
           rustup toolchain link ws63 "$PWD/stage2"
           git clone --depth 1 --recurse-submodules https://github.com/sanchuanhehe/ws63-rs.git rs
-          (cd rs && cargo build -p blinky -p uart_hello -p timer_irq --release) || true
+          (cd rs && cargo build -p blinky -p uart_hello -p timer_irq -p net_ping --release) || true
           WS63_RS="$PWD/rs" bash scripts/smoke-test.sh || echo "smoke-test best-effort"
 
       - name: Package release assets
