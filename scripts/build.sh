@@ -90,11 +90,12 @@ if ! grep -q "ws63-test" "$QM"; then
     sed -i "s#^qtests_riscv32 = \\\\#qtests_riscv32 = ['ws63-test'] + \\\\#" "$QM"
 fi
 
-# 5. configure (once)
+# 5. configure (once). --enable-slirp gives `-netdev user` (SLIRP NAT) for the
+#    Wi-Fi/Ethernet MAC model (needs libslirp-dev installed).
 if [ ! -f "$QEMU_DIR/build/build.ninja" ]; then
-    echo "==> configuring (riscv32-softmmu only)"
+    echo "==> configuring (riscv32-softmmu only, slirp on)"
     (cd "$QEMU_DIR" && ./configure --target-list=riscv32-softmmu \
-        --disable-werror --disable-docs)
+        --disable-werror --disable-docs --enable-slirp)
 fi
 
 # 6. build the emulator, then the WS63 qtest binary (ninja picks up the
