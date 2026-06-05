@@ -271,5 +271,37 @@ else
     echo "==> async_bus: SKIP (build it: cargo build -p async_bus --release)"
 fi
 
+# ---- spi_loopback: blocking SPI0 full-duplex round-trip (two-stage clock) ----
+SPIL_ELF="$TARGET_DIR/spi_loopback"
+if [ -f "$SPIL_ELF" ]; then
+    echo "==> spi_loopback: expecting blocking SPI0 transfer() loopback to round-trip"
+    timeout 8 "$QEMU_BIN" -M ws63 -nographic -serial mon:stdio \
+        -kernel "$SPIL_ELF" </dev/null >"$TMP/spil.out" 2>/dev/null || true
+    if grep -q "SPI loopback OK" "$TMP/spil.out"; then
+        echo "    PASS: SPI0 full-duplex loopback round-trips (CLDO_CRG clock writes absorbed)"
+    else
+        echo "    FAIL: loopback not confirmed. Got:"; tail -4 "$TMP/spil.out" | sed 's/^/      /'
+        fail=1
+    fi
+else
+    echo "==> spi_loopback: SKIP (build it: cargo build -p spi_loopback --release)"
+fi
+
+# ---- i2c_scan: I2C0 bus scan (driver + NACK/timeout path) ----
+I2CS_ELF="$TARGET_DIR/i2c_scan"
+if [ -f "$I2CS_ELF" ]; then
+    echo "==> i2c_scan: expecting the I2C0 address scan to run to completion"
+    timeout 8 "$QEMU_BIN" -M ws63 -nographic -serial mon:stdio \
+        -kernel "$I2CS_ELF" </dev/null >"$TMP/i2cs.out" 2>/dev/null || true
+    if grep -qE "scan done|no devices acked" "$TMP/i2cs.out"; then
+        echo "    PASS: scan completed ($(grep -c 'found device' "$TMP/i2cs.out") addrs acked by the QEMU model)"
+    else
+        echo "    FAIL: scan did not complete. Got:"; tail -4 "$TMP/i2cs.out" | sed 's/^/      /'
+        fail=1
+    fi
+else
+    echo "==> i2c_scan: SKIP (build it: cargo build -p i2c_scan --release)"
+fi
+
 [ "$fail" -eq 0 ] && echo "SMOKE TEST: PASS" || echo "SMOKE TEST: FAIL"
 exit "$fail"
