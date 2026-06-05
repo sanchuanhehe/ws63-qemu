@@ -1,0 +1,22 @@
+diff --git a/hw/riscv/ws63.c b/hw/riscv/ws63.c
+index 30da70c..f0ea935 100644
+--- a/hw/riscv/ws63.c
++++ b/hw/riscv/ws63.c
+@@ -47,7 +47,7 @@
+ #include "system/system.h"
+ #include "system/reset.h"
+ #include "system/runstate.h"
+-#include "exec/address-spaces.h"
++#include "system/address-spaces.h"
+ #include "elf.h"
+ #include "trace.h"     /* generated from hw/riscv/trace-events (ws63_* events) */
+ 
+@@ -331,7 +331,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(WS63UartState, WS63_UART)
+ struct WS63UartState {
+     SysBusDevice parent_obj;
+     MemoryRegion iomem;
+-    CharBackend chr;
++    CharFrontend chr;
+     qemu_irq irq;
+     uint8_t rx_byte;
+     bool rx_valid;

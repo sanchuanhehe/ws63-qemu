@@ -40,17 +40,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Supported versions — each has its own series under patches/<tag>/, both
+          # Supported versions — each has its own series under patches/<tag>/,
           # verified to apply, build, and pass qtest. Blocking.
           - qemu_tag: v10.0.0   # current default baseline
             required: true
+          - qemu_tag: v10.2.3   # newest 10.2.x, ported
+            required: true
           - qemu_tag: v9.2.4    # previous pin, kept maintained
             required: true
-          # Newest stable — forward-compat radar. No patches/v10.2.3/ yet (target/
-          # riscv + hw/riscv churned after 10.0), so build.sh fails "not ported";
+          # Newest stable major — forward-compat radar. No patches/v11.0.1/ yet
+          # (target/riscv churns across majors), so build.sh fails "not ported";
           # allowed to fail. A red cell is the "port the series to the next QEMU"
-          # signal. Add patches/v10.2.3/ to turn it green.
-          - qemu_tag: v10.2.3
+          # signal. Add patches/v11.0.1/ to turn it green.
+          - qemu_tag: v11.0.1
             required: false
 
     steps:
