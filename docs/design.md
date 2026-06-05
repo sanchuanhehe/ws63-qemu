@@ -12,7 +12,7 @@
 QEMU 没有稳定的「树外板卡插件」ABI，因此自定义 SoC 的标准做法是 fork 并加一个 in-tree 板卡文件
 ——Espressif 的 esp-qemu 即如此（`hw/riscv/esp32c3.c` + 自定义 CPU/外设）。本项目同样：
 
-- 默认基线 **QEMU v10.0.0**（`scripts/build.sh` 克隆该 tag；从 v9.2.4 升级而来）。**同时维护 v10.2.3 与 v9.2.4**。
+- 默认基线 **QEMU v10.0.0**（`scripts/build.sh` 克隆该 tag；从 v9.2.4 升级而来）。**同时维护 v10.2.3、v11.0.1 与 v9.2.4**。
 - 新增单文件 `hw/riscv/ws63.c`（机器模型 + 外设设备）+ `insn_trans/trans_xlinx.c.inc`（xlinx 解码器)+ `tests/qtest/ws63-test.c`
   作为**新文件直接拷入**（不冲突，保留在 `src/` 便于编辑，跟随默认基线 v10）；对**既有 QEMU 文件的改动**走
   **按版本分目录的 patch-series** `patches/<QEMU_TAG>/0001..*.patch`（`git format-patch` 生成):`0001` target/riscv 核

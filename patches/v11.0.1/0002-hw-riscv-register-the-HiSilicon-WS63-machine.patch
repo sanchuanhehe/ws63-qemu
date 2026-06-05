@@ -1,0 +1,57 @@
+From e535c398f4dd747127787e8384c3f472ba3e624c Mon Sep 17 00:00:00 2001
+From: ws63-rs <noreply@anthropic.com>
+Date: Fri, 5 Jun 2026 13:44:15 +0800
+Subject: [PATCH 2/3] hw/riscv: register the HiSilicon WS63 machine
+
+Build-system integration for hw/riscv/ws63.c. (QEMU v11.0.x.)
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+---
+ hw/riscv/Kconfig      | 6 ++++++
+ hw/riscv/meson.build  | 1 +
+ hw/riscv/trace-events | 5 +++++
+ 3 files changed, 12 insertions(+)
+
+diff --git a/hw/riscv/Kconfig b/hw/riscv/Kconfig
+index 0222c93..ee9ae1b 100644
+--- a/hw/riscv/Kconfig
++++ b/hw/riscv/Kconfig
+@@ -120,6 +120,12 @@ config SPIKE
+     select RISCV_ACLINT
+     select SIFIVE_PLIC
+ 
++config WS63
++    bool
++    default y
++    depends on RISCV32
++    select UNIMP
++
+ config XIANGSHAN_KUNMINGHU
+     bool
+     default y
+diff --git a/hw/riscv/meson.build b/hw/riscv/meson.build
+index 533472e..2aa7a38 100644
+--- a/hw/riscv/meson.build
++++ b/hw/riscv/meson.build
+@@ -18,4 +18,5 @@ riscv_ss.add(when: 'CONFIG_XIANGSHAN_KUNMINGHU', if_true: files('xiangshan_kmh.c
+ riscv_ss.add(when: 'CONFIG_RISCV_MIPS_CPS', if_true: files('cps.c'))
+ riscv_ss.add(when: 'CONFIG_MIPS_BOSTON_AIA', if_true: files('boston-aia.c'))
+ 
++riscv_ss.add(when: 'CONFIG_WS63', if_true: files('ws63.c'))
+ hw_arch += {'riscv': riscv_ss}
+diff --git a/hw/riscv/trace-events b/hw/riscv/trace-events
+index b50b14a..4e9ed24 100644
+--- a/hw/riscv/trace-events
++++ b/hw/riscv/trace-events
+@@ -24,3 +24,8 @@ riscv_iommu_hpm_incr_ctr(uint64_t cntr_val) "cntr_val 0x%"PRIx64
+ riscv_iommu_hpm_iocntinh_cy(bool prev_cy_inh) "prev_cy_inh %d"
+ riscv_iommu_hpm_cycle_write(uint32_t ovf, uint64_t val) "ovf 0x%x val 0x%"PRIx64
+ riscv_iommu_hpm_evt_write(uint32_t ctr_idx, uint32_t ovf, uint64_t val) "ctr_idx 0x%x ovf 0x%x val 0x%"PRIx64
++
++# --- HiSilicon WS63 SoC model (ws63.c) ---
++ws63_gpio_set(uint32_t out) "GPIO DATA_SET out=0x%08x"
++ws63_gpio_clr(uint32_t out) "GPIO DATA_CLR out=0x%08x"
++ws63_dma_xfer(int ch, unsigned fc, unsigned sper, unsigned dper, uint32_t src, uint32_t dst, unsigned items, unsigned width) "DMA ch%d fc=%u sper=%u dper=%u src=0x%08x dst=0x%08x items=%u width=%u"
+-- 
+2.43.0
+

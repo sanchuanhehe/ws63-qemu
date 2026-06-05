@@ -11,8 +11,9 @@ shift, idioms change), so the series is **maintained per version**:
 
 ```
 patches/
-  v10.0.0/   <- current default baseline (scripts/build.sh QEMU_TAG default)
+  v11.0.1/   <- newest stable major, ported
   v10.2.3/   <- newest 10.2.x, ported
+  v10.0.0/   <- current default baseline (scripts/build.sh QEMU_TAG default)
   v9.2.4/    <- previous baseline, still maintained
 ```
 
@@ -31,7 +32,7 @@ Each version dir holds the same logical series:
 | `0001-target-riscv-*` | `target/riscv/{cpu-qom.h,cpu.c,cpu.h,cpu_helper.c,translate.c}` (+ `internals.h` on 10.2) | `-cpu ws63`, custom local interrupts (LOCI* CSRs, IRQ ≥32 delivery), xlinx decode hooks, mask-ROM call interception |
 | `0002-hw-riscv-*` | `hw/riscv/{meson.build,Kconfig,trace-events}` | register the machine |
 | `0003-tests-qtest-*` | `tests/qtest/meson.build` | register `ws63-test` |
-| `0004-*` (version-specific) | the copied `ws63.c` | adapts it to a non-default QEMU API. `v9.2.4/0004`: `system/`→`sysemu/` headers + non-`const` `Property[]` with `DEFINE_PROP_END_OF_LIST`. `v10.2.3/0004`: `exec/`→`system/address-spaces.h` + `CharBackend`→`CharFrontend` |
+| `0004-*` (version-specific) | the copied `ws63.c` | adapts it to a non-default QEMU API. `v9.2.4/0004`: `system/`→`sysemu/` headers + non-`const` `Property[]` with `DEFINE_PROP_END_OF_LIST`. `v10.2.3/0004`: `exec/`→`system/address-spaces.h` + `CharBackend`→`CharFrontend`. `v11.0.1/0004`: the v10.2 changes + six `hw/*.h`→`hw/core/*.h` (v11 header reorg) |
 
 Note how the same support drifts across releases: 10.0→10.2 alone moved `insn_len`
 to `internals.h`, made the CPU definition declarative (`DEFINE_RISCV_CPU`),

@@ -42,18 +42,22 @@ jobs:
         include:
           # Supported versions — each has its own series under patches/<tag>/,
           # verified to apply, build, and pass qtest. Blocking.
-          - qemu_tag: v10.0.0   # current default baseline
+          - qemu_tag: v11.0.1   # newest stable major, ported
             required: true
           - qemu_tag: v10.2.3   # newest 10.2.x, ported
             required: true
+          - qemu_tag: v10.0.0   # current default baseline
+            required: true
           - qemu_tag: v9.2.4    # previous pin, kept maintained
             required: true
-          # Newest stable major — forward-compat radar. No patches/v11.0.1/ yet
-          # (target/riscv churns across majors), so build.sh fails "not ported";
-          # allowed to fail. A red cell is the "port the series to the next QEMU"
-          # signal. Add patches/v11.0.1/ to turn it green.
-          - qemu_tag: v11.0.1
-            required: false
+          # FORWARD-COMPAT RADAR: when QEMU ships a release newer than v11.0.1,
+          # add it here as an experimental cell:
+          #   - qemu_tag: v11.1.0    # or v12.0.0, etc.
+          #     required: false
+          # It will fail "not ported" (no patches/<tag>/) until the series is
+          # rebased — that red, non-blocking cell is the "port the next QEMU"
+          # signal. v11.0.1 is currently the newest stable tag, so there is no
+          # radar cell yet; all supported versions are green.
 
     steps:
       - uses: actions/checkout@v5

@@ -54,15 +54,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `scripts/build.sh`. New files (`ws63.c`, the xlinx decoder, the qtest) are copied
   from `src/`; edits to existing QEMU files are the series (`0001` target/riscv,
   `0002` machine registration, `0003` qtest registration; older versions add a
-  `0004` compat patch for the copied `ws63.c`). **v10.0.0, v10.2.3, and v9.2.4 are
-  maintained** — each verified to apply, build, and pass qtest 5/5 (the v10.x
-  series additionally pass the firmware smoke-test + C-SDK suite). v10.0 API
-  changes handled: `sysemu/`→`system/` headers, `Property[]` dropped the
-  `DEFINE_PROP_END_OF_LIST` terminator and became `const`. v10.2 went further:
-  `insn_len` moved to `internals.h`, the CPU definition became declarative
-  (`DEFINE_RISCV_CPU`), `decode_opc` became table-driven, `CharBackend`→
-  `CharFrontend`, and `exec/`→`system/address-spaces.h`. The `qtest-matrix`
-  radar now points at v11.0.1. See `patches/README.md`.
+  `0004` compat patch for the copied `ws63.c`). **v9.2.4, v10.0.0, v10.2.3, and
+  v11.0.1 are maintained** — each verified to apply, build, and pass qtest 5/5
+  (v10.x + v11 additionally pass the C-SDK suite). API drift handled per version:
+  v10.0 `sysemu/`→`system/` headers and `const` `Property[]` (no terminator); v10.2
+  `insn_len`→`internals.h`, declarative `DEFINE_RISCV_CPU`, table-driven
+  `decode_opc`, `CharBackend`→`CharFrontend`, `exec/`→`system/address-spaces.h`;
+  v11 six `hw/*.h`→`hw/core/*.h`. The `qtest-matrix` now has all four versions
+  green; the forward radar will point at the next QEMU release. See
+  `patches/README.md`.
+  - **Known v11 limitation**: the firmware smoke-test passes 16/17 on v11 (qtest
+    5/5, C-SDK 5/5, including the blob-*link* example); only `rf_port_demo` (which
+    *executes* the vendor Wi-Fi blob through the porting layer) hangs in pure
+    compute on v11 — no MMIO/exception/unimp events. Does not affect the
+    qtest-matrix (qtest only) or `ci.yml` (runs on the v10.0.0 default).
 
 ## [0.3.0] - 2026-06-01
 

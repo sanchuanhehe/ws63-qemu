@@ -84,6 +84,7 @@ ws63-qemu/
 │   │   ├── 0001-target-riscv-*.patch  #     CPU 型号 + 本地中断(≥32) + xlinx 解码 hooks + ROM 拦截
 │   │   ├── 0002-hw-riscv-*.patch      #     注册机器（meson 源集 + Kconfig + trace-events）
 │   │   └── 0003-tests-qtest-*.patch   #     注册 ws63-test（qtests_riscv32）
+│   ├── v11.0.1/                       #   最新稳定主版，已移植（+ 0004：hw/→hw/core/ 头迁移）
 │   ├── v10.2.3/                       #   最新 10.2.x，已移植（同结构 + 0004 适配 ws63.c）
 │   └── v9.2.4/                        #   上一基线，仍维护（同结构 + 0004 适配 ws63.c 的旧 API）
 ├── scripts/
