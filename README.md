@@ -79,10 +79,15 @@ ws63-qemu/
 │   ├── hw/riscv/ws63.c                            # 机器模型 + 自定义 UART 设备（注入 QEMU 树）
 │   ├── target/riscv/insn_trans/trans_xlinx.c.inc  # xlinx 自定义 ISA 解码（注入）
 │   └── tests/qtest/ws63-test.c                    # 寄存器级 qtest（注入 QEMU 树）
-├── patches/ws63-target-riscv.patch  # 本地中断投递(≥32) + `-cpu ws63` + xlinx 解码 hooks
+├── patches/                          # 对既有 QEMU 文件改动的 patch-series，**按版本分目录**
+│   ├── v10.0.0/                       #   当前默认基线（git format-patch 生成）
+│   │   ├── 0001-target-riscv-*.patch  #     CPU 型号 + 本地中断(≥32) + xlinx 解码 hooks + ROM 拦截
+│   │   ├── 0002-hw-riscv-*.patch      #     注册机器（meson 源集 + Kconfig + trace-events）
+│   │   └── 0003-tests-qtest-*.patch   #     注册 ws63-test（qtests_riscv32）
+│   └── v9.2.4/                        #   上一基线，仍维护（同结构 + 0004 适配 ws63.c 的旧 API）
 ├── scripts/
-│   ├── setup-deps.sh        # 安装构建依赖
-│   ├── build.sh             # 克隆 QEMU@tag + 注入 + 构建（幂等）
+│   ├── setup-deps.sh        # 安装构建依赖（含 libslirp-dev）
+│   ├── build.sh             # 克隆 QEMU@$QEMU_TAG + 拷源文件 + apply patches/$QEMU_TAG/ + 构建（幂等）
 │   ├── run.sh               # 运行固件 ELF（DEBUG/ICOUNT/NV/SEMIHOST 开关）
 │   ├── smoke-test.sh        # 启动真实固件冒烟（ws63-rs 各示例 + C SDK）
 │   ├── csdk-test.sh         # C SDK 外设样例回归

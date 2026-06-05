@@ -1,0 +1,679 @@
+From 9e6b3f491d76a0cc023faef5766bd5b620ecb49b Mon Sep 17 00:00:00 2001
+From: ws63-rs <noreply@anthropic.com>
+Date: Fri, 5 Jun 2026 12:16:25 +0800
+Subject: [PATCH 1/3] target/riscv: HiSilicon WS63 SoC support
+
+Adds the target/riscv pieces the hw/riscv/ws63 machine needs (the machine
+itself, the xlinx decoder .inc, and the qtest are added/copied separately):
+
+  - `-cpu ws63`: a preset RV32IMFC_Zicsr/Zcf application core (rv32_ws63_cpu_init)
+    so machine init need not poke per-letter CPU properties (unavailable under
+    -accel qtest), and so Zcb/Zcmp don't claim the compressed encoding the xlinx
+    custom code-size instructions use.
+  - WS63 custom local interrupts (IRQ 32-95): the riscv31 core delivers these with
+    mcause = irq via vectored mtvec, gated by the LOCIEN CSRs + mstatus.MIE, which
+    RV32 mip/mie cannot represent. Adds the per-CPU LOCIEN/LOCIPD/LOCIPRI/PRITHD
+    state, the priority-aware pending selector, riscv_cpu_set_local_irq(), and the
+    take-time pending clear (one-shot delivery; the C SDK acks in software).
+  - xlinx custom-ISA decode hooks in translate.c (16/32/48-bit), dispatching to
+    insn_trans/trans_xlinx.c.inc; MAX_INSN_LEN raised to 6 for the 48-bit l.li.
+  - mask-ROM call interception: the fbb_ws63 app calls ROM library functions with
+    no ROM binary; intercept the resulting illegal-instruction trap in the ROM
+    range and emulate (mem*_s, *printf_s -> host libc, time getters, watchdog).
+
+Targets QEMU v10.0.x.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+---
+ target/riscv/cpu-qom.h    |   1 +
+ target/riscv/cpu.c        |  39 ++++
+ target/riscv/cpu.h        |  14 ++
+ target/riscv/cpu_helper.c | 412 +++++++++++++++++++++++++++++++++++++-
+ target/riscv/translate.c  |  31 ++-
+ 5 files changed, 493 insertions(+), 4 deletions(-)
+
+diff --git a/target/riscv/cpu-qom.h b/target/riscv/cpu-qom.h
+index 4cfdb74..c8f569e 100644
+--- a/target/riscv/cpu-qom.h
++++ b/target/riscv/cpu-qom.h
+@@ -49,6 +49,7 @@
+ #define TYPE_RISCV_CPU_SIFIVE_E51       RISCV_CPU_TYPE_NAME("sifive-e51")
+ #define TYPE_RISCV_CPU_SIFIVE_U34       RISCV_CPU_TYPE_NAME("sifive-u34")
+ #define TYPE_RISCV_CPU_SIFIVE_U54       RISCV_CPU_TYPE_NAME("sifive-u54")
++#define TYPE_RISCV_CPU_WS63             RISCV_CPU_TYPE_NAME("ws63")
+ #define TYPE_RISCV_CPU_THEAD_C906       RISCV_CPU_TYPE_NAME("thead-c906")
+ #define TYPE_RISCV_CPU_VEYRON_V1        RISCV_CPU_TYPE_NAME("veyron-v1")
+ #define TYPE_RISCV_CPU_TT_ASCALON       RISCV_CPU_TYPE_NAME("tt-ascalon")
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index 09ded68..4855ab2 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -819,6 +819,36 @@ static void rv32_imafcu_nommu_cpu_init(Object *obj)
+     cpu->cfg.pmp = true;
+ }
+ 
++/*
++ * HiSilicon WS63 "riscv31" application core: RV32IMFC_Zicsr, hard-float ilp32f,
++ * no A (atomics), no MMU. Presets the exact ISA the hw/riscv/ws63 machine needs
++ * so `-cpu ws63` works, and so machine init need not poke the configurable
++ * CPU's per-letter properties (those are unavailable under -accel qtest).
++ *
++ * Zcf (compressed float load/store) is enabled; Zca/Zcb/Zcmp/Zcmt are NOT — the
++ * HiSilicon "xlinx" custom code-size instructions (push/pop/popret, uxtb/uxth)
++ * occupy that compressed (funct3=100) encoding space and are decoded in
++ * target/riscv/insn_trans/trans_xlinx.c.inc; enabling Zcb/Zcmp would mis-decode
++ * them. Zicntr is kept for rdcycle/rdtime used by firmware timing loops.
++ */
++static void rv32_ws63_cpu_init(Object *obj)
++{
++    CPURISCVState *env = &RISCV_CPU(obj)->env;
++    RISCVCPU *cpu = RISCV_CPU(obj);
++
++    riscv_cpu_set_misa_ext(env, RVI | RVM | RVF | RVC);
++    env->priv_ver = PRIV_VERSION_LATEST;
++#ifndef CONFIG_USER_ONLY
++    set_satp_mode_max_supported(cpu, VM_1_10_MBARE);
++#endif
++
++    cpu->cfg.ext_zicsr = true;
++    cpu->cfg.ext_zifencei = true;
++    cpu->cfg.ext_zicntr = true;
++    cpu->cfg.ext_zcf = true;
++    cpu->cfg.pmp = true;
++}
++
+ static void rv32i_bare_cpu_init(Object *obj)
+ {
+     CPURISCVState *env = &RISCV_CPU(obj)->env;
+@@ -1044,6 +1074,14 @@ static void riscv_cpu_reset_hold(Object *obj, ResetType type)
+     env->misa_mxl = mcc->misa_mxl_max;
+     env->priv = PRV_M;
+     env->mstatus &= ~(MSTATUS_MIE | MSTATUS_MPRV);
++    /* WS63 custom local interrupts: clear enable + pending on reset. */
++    env->ws63_locien[0] = env->ws63_locien[1] = 0;
++    env->ws63_locipd[0] = env->ws63_locipd[1] = 0;
++    /* default priority 1 for every IRQ (4-bit fields), threshold 0 -> all eligible */
++    for (int ws63_i = 0; ws63_i < 16; ws63_i++) {
++        env->ws63_locipri[ws63_i] = 0x11111111u;
++    }
++    env->ws63_prithd = 0;
+     if (env->misa_mxl > MXL_RV32) {
+         /*
+          * The reset status of SXL/UXL is undefined, but mstatus is WARL
+@@ -3243,6 +3281,7 @@ static const TypeInfo riscv_cpu_type_infos[] = {
+     DEFINE_VENDOR_CPU(TYPE_RISCV_CPU_SIFIVE_E31, MXL_RV32,  rv32_sifive_e_cpu_init),
+     DEFINE_VENDOR_CPU(TYPE_RISCV_CPU_SIFIVE_E34, MXL_RV32,  rv32_imafcu_nommu_cpu_init),
+     DEFINE_VENDOR_CPU(TYPE_RISCV_CPU_SIFIVE_U34, MXL_RV32,  rv32_sifive_u_cpu_init),
++    DEFINE_VENDOR_CPU(TYPE_RISCV_CPU_WS63,       MXL_RV32,  rv32_ws63_cpu_init),
+     DEFINE_BARE_CPU(TYPE_RISCV_CPU_RV32I,        MXL_RV32,  rv32i_bare_cpu_init),
+     DEFINE_BARE_CPU(TYPE_RISCV_CPU_RV32E,        MXL_RV32,  rv32e_bare_cpu_init),
+ #endif
+diff --git a/target/riscv/cpu.h b/target/riscv/cpu.h
+index 51e49e0..ce5c4e8 100644
+--- a/target/riscv/cpu.h
++++ b/target/riscv/cpu.h
+@@ -288,6 +288,18 @@ struct CPUArchState {
+     uint64_t mie;
+     uint64_t mideleg;
+ 
++    /*
++     * HiSilicon WS63 custom local interrupts (IRQ 32-95). The riscv31 core
++     * delivers these with mcause = irq number via vectored mtvec, gated by the
++     * custom LOCIEN CSRs (0xBE0-0xBE2) and mstatus.MIE. We hold enable + pending
++     * here (bit n = IRQ n, word n/64); see riscv_cpu_local_irq_pending() and
++     * riscv_cpu_set_local_irq(). RV32 mip/mie cannot represent IRQ >= 64.
++     */
++    uint64_t ws63_locien[2];
++    uint64_t ws63_locipd[2];
++    uint32_t ws63_locipri[16]; /* LOCIPRI0-15 (0xBC0): 4-bit priority per IRQ, 8/reg */
++    uint32_t ws63_prithd;      /* PRITHD (0xBFE): deliver IRQ only if priority > thd */
++
+     /*
+      * When mideleg[i]=0 and mvien[i]=1, sie[i] is no more
+      * alias of mie[i] and needs to be maintained separately.
+@@ -601,6 +613,8 @@ uint64_t riscv_cpu_update_mip(CPURISCVState *env, uint64_t mask,
+                               uint64_t value);
+ void riscv_cpu_set_rnmi(RISCVCPU *cpu, uint32_t irq, bool level);
+ void riscv_cpu_interrupt(CPURISCVState *env);
++/* HiSilicon WS63 custom local interrupt (IRQ 32-95): set/clear pending. */
++void riscv_cpu_set_local_irq(CPURISCVState *env, int irq, int level);
+ #define BOOL_TO_MASK(x) (-!!(x)) /* helper for riscv_cpu_update_mip value */
+ void riscv_cpu_set_rdtime_fn(CPURISCVState *env, uint64_t (*fn)(void *),
+                              void *arg);
+diff --git a/target/riscv/cpu_helper.c b/target/riscv/cpu_helper.c
+index 6c4391d..9d795f4 100644
+--- a/target/riscv/cpu_helper.c
++++ b/target/riscv/cpu_helper.c
+@@ -31,6 +31,7 @@
+ #include "accel/tcg/cpu-ops.h"
+ #include "trace.h"
+ #include "semihosting/common-semi.h"
++#include "system/runstate.h"
+ #include "system/cpu-timers.h"
+ #include "cpu_bits.h"
+ #include "debug.h"
+@@ -562,6 +563,41 @@ int riscv_cpu_vsirq_pending(CPURISCVState *env)
+                                     (irqs | irqs_f_vs), env->hviprio);
+ }
+ 
++/*
++ * HiSilicon WS63 custom local interrupts (IRQ 32-95). Returns the lowest
++ * enabled+pending IRQ number (>= 32), or RISCV_EXCP_NONE. Delivered with
++ * mcause = irq via the standard vectored-mtvec path in riscv_cpu_do_interrupt.
++ * (Priority/PRITHD is not yet modeled — lowest-number-first; refine later.)
++ */
++static int ws63_local_irq_pending(CPURISCVState *env)
++{
++    /*
++     * WS63 priority/threshold: each IRQ has a 4-bit priority in LOCIPRI (8/reg,
++     * priority irq = ws63_locipri[irq/8] bits[(irq%8)*4 +: 4]); higher value =
++     * more urgent. An IRQ is eligible only when its priority > PRITHD (strict).
++     * Among eligible pending+enabled IRQs, deliver the highest priority; ties go
++     * to the lowest IRQ number. (Default priority 1, PRITHD 0 -> deliver by
++     * number, preserving the pre-priority behaviour.)
++     */
++    int best_irq = RISCV_EXCP_NONE;
++    int best_pri = -1;
++    int w;
++    for (w = 0; w < 2; w++) {
++        uint64_t active = env->ws63_locipd[w] & env->ws63_locien[w];
++        while (active) {
++            int b = ctz64(active);
++            int irq = w * 64 + b;
++            int pri = (env->ws63_locipri[(irq >> 3) & 15] >> ((irq & 7) * 4)) & 0xF;
++            active &= active - 1; /* clear lowest set bit */
++            if (pri > (int)env->ws63_prithd && pri > best_pri) {
++                best_pri = pri;
++                best_irq = irq; /* iterate ascending -> ties keep lowest IRQ */
++            }
++        }
++    }
++    return best_irq;
++}
++
+ static int riscv_cpu_local_irq_pending(CPURISCVState *env)
+ {
+     uint64_t irqs, pending, mie, hsie, vsie, irqs_f, irqs_f_vs;
+@@ -604,6 +640,14 @@ static int riscv_cpu_local_irq_pending(CPURISCVState *env)
+                                         irqs, env->miprio);
+     }
+ 
++    /* WS63 custom local interrupts (IRQ >= 32), gated by M-mode enable. */
++    if (mie && !env->virt_enabled) {
++        int ws63_irq = ws63_local_irq_pending(env);
++        if (ws63_irq != RISCV_EXCP_NONE) {
++            return ws63_irq;
++        }
++    }
++
+     /* Check for virtual S-mode interrupts. */
+     irqs_f = env->mvip & (env->mvien & ~env->mideleg) & env->sie;
+ 
+@@ -832,7 +876,9 @@ void riscv_cpu_interrupt(CPURISCVState *env)
+ 
+     vstip = env->vstime_irq ? MIP_VSTIP : 0;
+ 
+-    if (env->mip | vsgein | vstip | irqf) {
++    if (env->mip | vsgein | vstip | irqf |
++        (env->ws63_locipd[0] & env->ws63_locien[0]) |
++        (env->ws63_locipd[1] & env->ws63_locien[1])) {
+         cpu_interrupt(cs, CPU_INTERRUPT_HARD);
+     } else {
+         cpu_reset_interrupt(cs, CPU_INTERRUPT_HARD);
+@@ -855,6 +901,26 @@ uint64_t riscv_cpu_update_mip(CPURISCVState *env, uint64_t mask, uint64_t value)
+     return old;
+ }
+ 
++void riscv_cpu_set_local_irq(CPURISCVState *env, int irq, int level)
++{
++    uint64_t bit;
++    int w;
++
++    if (irq < 32 || irq >= 128) {
++        return;
++    }
++    bit = 1ULL << (irq & 63);
++    w = irq >> 6;
++
++    BQL_LOCK_GUARD();
++    if (level) {
++        env->ws63_locipd[w] |= bit;
++    } else {
++        env->ws63_locipd[w] &= ~bit;
++    }
++    riscv_cpu_interrupt(env);
++}
++
+ void riscv_cpu_set_rdtime_fn(CPURISCVState *env, uint64_t (*fn)(void *),
+                              void *arg)
+ {
+@@ -1904,6 +1970,7 @@ bool riscv_cpu_tlb_fill(CPUState *cs, vaddr address, int size,
+                                        access_type, MMUIdx_U, false, true,
+                                        false, probe);
+ 
++
+             qemu_log_mask(CPU_LOG_MMU,
+                           "%s 2nd-stage address=%" VADDR_PRIx
+                           " ret %d physical "
+@@ -2219,6 +2286,324 @@ static target_ulong promote_load_fault(target_ulong orig_cause)
+     /* if no promotion, return original cause */
+     return orig_cause;
+ }
++/*
++ * ===== WS63 mask-ROM call interception =====
++ *
++ * The fbb_ws63 C SDK application calls library functions burned into the on-chip
++ * mask ROM (0x109000..0x14C000); no ROM binary ships with the SDK. When the app
++ * jumps to a ROM entry, the (empty) ROM there traps as an illegal instruction;
++ * we intercept that in riscv_cpu_do_interrupt and emulate the function in host C,
++ * then resume at the caller (ra). Most are stubbed to return 0 (success); mem*_s,
++ * the *printf_s family (delegated to host libc so the app's formatted logs
++ * appear) and the time getters are implemented. Addresses are the ws63-liteos-app
++ * ROM ABI (drivers/chips/ws63/rom_config/acore/acore.sym).
++ */
++#define WS63_ROM_BASE 0x00109000u
++#define WS63_ROM_END  0x0014C000u
++/* Scratch RAM (in the PPB region, past the SCS) for ROM vtables we synthesize. */
++#define WS63_ROM_SCRATCH 0xE000F000u
++enum { WS63_A0 = 10, WS63_A1, WS63_A2, WS63_A3, WS63_A4, WS63_A5, WS63_A6, WS63_A7 };
++
++/*
++ * Some ROM functions return a pointer to a ROM-resident vtable (function-pointer
++ * table) that the app patches (stores its overrides) and later calls through.
++ * We have no ROM data, so hand back a writable scratch slot pre-filled with a
++ * trampoline ROM address in every entry: the app's patched entries win, and
++ * calls through un-patched entries land in the ROM range and dispatch to the
++ * default "return 0 (success)" handler instead of jumping to a null pointer.
++ */
++static uint32_t ws63_rom_vtable(int idx)
++{
++    uint32_t base = WS63_ROM_SCRATCH + (uint32_t)idx * 0x100;
++    uint32_t tramp = WS63_ROM_BASE;
++    for (int k = 0; k < 0x100 / 4; k++) {
++        cpu_physical_memory_write(base + k * 4, &tramp, 4);
++    }
++    return base;
++}
++
++static int ws63_gstr(uint32_t addr, char *out, int max)
++{
++    int i;
++    for (i = 0; i < max - 1; i++) {
++        uint8_t c;
++        cpu_physical_memory_read(addr + i, &c, 1);
++        out[i] = (char)c;
++        if (!c) {
++            return i;
++        }
++    }
++    out[i] = 0;
++    return i;
++}
++
++typedef struct {
++    CPURISCVState *env;
++    int reg;        /* next a-register (varargs) */
++    uint32_t va;    /* va_list pointer (vsnprintf_s) */
++    bool use_va;
++} WS63Args;
++
++static uint32_t ws63_next_arg(WS63Args *a)
++{
++    uint32_t v;
++    if (a->use_va) {
++        cpu_physical_memory_read(a->va, &v, 4);
++        a->va += 4;
++        return v;
++    }
++    if (a->reg <= WS63_A7) {
++        return a->env->gpr[a->reg++];
++    }
++    cpu_physical_memory_read(a->env->gpr[2] + (a->reg - (WS63_A7 + 1)) * 4, &v, 4);
++    a->reg++;
++    return v;
++}
++
++/* Minimal printf: format a guest format string + args into a host buffer,
++ * delegating each directive to host snprintf (correct width/padding/precision). */
++static int ws63_vformat(char *out, int outmax, uint32_t fmt_addr, WS63Args *args)
++{
++    char fmt[512];
++    int n = 0, i = 0;
++
++    ws63_gstr(fmt_addr, fmt, sizeof(fmt));
++    while (fmt[i] && n < outmax - 1) {
++        char spec[32], tmp[256];
++        int s = 0, lng = 0;
++        char conv;
++
++        if (fmt[i] != '%') {
++            out[n++] = fmt[i++];
++            continue;
++        }
++        spec[s++] = fmt[i++];
++        while (fmt[i] && strchr("-+ 0#", fmt[i]) && s < 8) {
++            spec[s++] = fmt[i++];
++        }
++        if (fmt[i] == '*') {            /* width from arg */
++            i++;
++            s += snprintf(&spec[s], sizeof(spec) - s, "%d",
++                          (int)(int32_t)ws63_next_arg(args));
++        } else {
++            while (fmt[i] >= '0' && fmt[i] <= '9' && s < 16) {
++                spec[s++] = fmt[i++];
++            }
++        }
++        if (fmt[i] == '.') {
++            spec[s++] = fmt[i++];
++            if (fmt[i] == '*') {        /* precision from arg */
++                i++;
++                s += snprintf(&spec[s], sizeof(spec) - s, "%d",
++                              (int)(int32_t)ws63_next_arg(args));
++            } else {
++                while (fmt[i] >= '0' && fmt[i] <= '9' && s < 22) {
++                    spec[s++] = fmt[i++];
++                }
++            }
++        }
++        while (fmt[i] == 'l') {
++            lng++;
++            i++;
++        }
++        while (fmt[i] == 'h' || fmt[i] == 'z') {
++            i++;
++        }
++        conv = fmt[i++];
++
++        switch (conv) {
++        case '%':
++            tmp[0] = '%';
++            tmp[1] = 0;
++            break;
++        case 'c':
++            spec[s++] = 'c';
++            spec[s] = 0;
++            snprintf(tmp, sizeof(tmp), spec, (int)ws63_next_arg(args));
++            break;
++        case 's': {
++            char gs[256];
++            ws63_gstr(ws63_next_arg(args), gs, sizeof(gs));
++            spec[s++] = 's';
++            spec[s] = 0;
++            snprintf(tmp, sizeof(tmp), spec, gs);
++            break;
++        }
++        case 'p': {
++            snprintf(tmp, sizeof(tmp), "0x%08x", ws63_next_arg(args));
++            break;
++        }
++        case 'd': case 'i': case 'u': case 'x': case 'X': case 'o':
++            if (lng >= 2) {
++                uint32_t lo = ws63_next_arg(args), hi = ws63_next_arg(args);
++                char hostspec[40];
++                snprintf(hostspec, sizeof(hostspec), "%.*sll%c", s, spec, conv);
++                snprintf(tmp, sizeof(tmp), hostspec, ((uint64_t)hi << 32) | lo);
++            } else {
++                spec[s++] = conv;
++                spec[s] = 0;
++                snprintf(tmp, sizeof(tmp), spec, ws63_next_arg(args));
++            }
++            break;
++        default:
++            tmp[0] = '%';
++            tmp[1] = conv;
++            tmp[2] = 0;
++            break;
++        }
++        for (int k = 0; tmp[k] && n < outmax - 1; k++) {
++            out[n++] = tmp[k];
++        }
++    }
++    out[n] = 0;
++    return n;
++}
++
++/*
++ * WS63 watchdog ROM-API emulation. The whole watchdog stack lives in the mask
++ * ROM (uapi_watchdog_* @ 0x109f7e.., hal_watchdog_* ..) which ships no binary, so
++ * the calls would otherwise be no-op-stubbed and the WDT would never run (kicks
++ * do nothing; a hung firmware would never be reset). We emulate the API with a
++ * virtual one-shot timer: enable() arms it for the configured timeout, kick()
++ * re-arms it, and on expiry (i.e. the firmware stopped kicking) we reset the SoC
++ * — the watchdog's actual job. A healthy firmware that keeps kicking is never
++ * reset. (Resetting from the timer callback is thread-safe via
++ * qemu_system_reset_request; injecting the firmware's interrupt-mode timeout
++ * callback would need vCPU-synchronised redirection and is not modelled.)
++ */
++static QEMUTimer *g_ws63_wdt_timer;
++static uint32_t g_ws63_wdt_timeout = 2; /* seconds, from uapi_watchdog_init */
++
++static void ws63_wdt_fire(void *opaque)
++{
++    qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
++}
++
++static void ws63_wdt_rearm(void)
++{
++    if (!g_ws63_wdt_timer) {
++        g_ws63_wdt_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, ws63_wdt_fire, NULL);
++    }
++    timer_mod(g_ws63_wdt_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
++              (uint64_t)g_ws63_wdt_timeout * 1000000000ULL);
++}
++
++static void ws63_rom_call(CPURISCVState *env)
++{
++    uint32_t pc = env->pc;
++    target_ulong *g = env->gpr;
++    long ret = 0;
++
++    switch (pc) {
++    case 0x10aeb4: { /* memcpy_s(dst, dmax, src, n) */
++        uint32_t dst = g[WS63_A0], dmax = g[WS63_A1], src = g[WS63_A2], n = g[WS63_A3];
++        if (n > dmax) { ret = -1; break; }
++        for (uint32_t k = 0; k < n; k++) {
++            uint8_t b;
++            cpu_physical_memory_read(src + k, &b, 1);
++            cpu_physical_memory_write(dst + k, &b, 1);
++        }
++        break;
++    }
++    case 0x10b790: { /* memmove_s(dst, dmax, src, n) */
++        uint32_t dst = g[WS63_A0], dmax = g[WS63_A1], src = g[WS63_A2], n = g[WS63_A3];
++        if (n > dmax) { ret = -1; break; }
++        uint8_t *t = g_malloc(n ? n : 1);
++        cpu_physical_memory_read(src, t, n);
++        cpu_physical_memory_write(dst, t, n);
++        g_free(t);
++        break;
++    }
++    case 0x10b7f6: { /* memset_s(dst, dmax, c, n) */
++        uint32_t dst = g[WS63_A0], dmax = g[WS63_A1], n = g[WS63_A3];
++        uint8_t c = (uint8_t)g[WS63_A2];
++        if (n > dmax) { ret = -1; break; }
++        for (uint32_t k = 0; k < n; k++) {
++            cpu_physical_memory_write(dst + k, &c, 1);
++        }
++        break;
++    }
++    case 0x10cc3c: { /* sprintf_s(dst, dmax, fmt, ...) */
++        uint32_t dst = g[WS63_A0], dmax = g[WS63_A1];
++        char buf[512];
++        WS63Args a = { env, WS63_A3, 0, false };
++        int len = ws63_vformat(buf, sizeof(buf), g[WS63_A2], &a);
++        if (dmax && (uint32_t)len >= dmax) { len = dmax - 1; }
++        cpu_physical_memory_write(dst, buf, len + 1);
++        ret = len;
++        break;
++    }
++    case 0x10cc0a: { /* snprintf_s(dst, dmax, count, fmt, ...) */
++        uint32_t dst = g[WS63_A0], dmax = g[WS63_A1], count = g[WS63_A2];
++        char buf[512];
++        WS63Args a = { env, WS63_A4, 0, false };
++        int len = ws63_vformat(buf, sizeof(buf), g[WS63_A3], &a);
++        uint32_t cap = (count < dmax) ? count : dmax;
++        if (cap && (uint32_t)len >= cap) { len = cap - 1; }
++        cpu_physical_memory_write(dst, buf, len + 1);
++        ret = len;
++        break;
++    }
++    case 0x10d1d0: { /* vsnprintf_s(dst, dmax, count, fmt, va_list) */
++        uint32_t dst = g[WS63_A0], dmax = g[WS63_A1], count = g[WS63_A2];
++        char buf[512];
++        WS63Args a = { env, 0, g[WS63_A4], true };
++        int len = ws63_vformat(buf, sizeof(buf), g[WS63_A3], &a);
++        uint32_t cap = (count < dmax) ? count : dmax;
++        if (cap && (uint32_t)len >= cap) { len = cap - 1; }
++        cpu_physical_memory_write(dst, buf, len + 1);
++        ret = len;
++        break;
++    }
++    case 0x10ac44: /* uapi_systick_get_count */
++    case 0x10acba: /* uapi_systick_get_us */
++    case 0x10d34a: { /* uapi_tcxo_get_us */
++        static uint64_t t_us;
++        t_us += 1000;
++        g[WS63_A1] = (uint32_t)(t_us >> 32);
++        ret = (uint32_t)t_us;
++        break;
++    }
++    case 0x10ac94: /* uapi_systick_get_ms */
++    case 0x10d32c: { /* uapi_tcxo_get_ms */
++        static uint64_t t_ms;
++        t_ms += 1;
++        g[WS63_A1] = 0;
++        ret = (uint32_t)t_ms;
++        break;
++    }
++    case 0x10aa9a: /* hal_timer_v150_get_funcs -> vtable ptr */
++        ret = ws63_rom_vtable(0);
++        break;
++    case 0x109ab8: /* hal_sfc_v150_funcs_get -> vtable ptr */
++        ret = ws63_rom_vtable(1);
++        break;
++    /* --- watchdog ROM API (emulated; see ws63_wdt_fire) --- */
++    case 0x109f7e: /* uapi_watchdog_init(timeout_seconds) */
++        g_ws63_wdt_timeout = g[WS63_A0] ? g[WS63_A0] : 2;
++        break;
++    case 0x109fb6: /* uapi_watchdog_enable(mode) -> arm */
++        ws63_wdt_rearm();
++        break;
++    case 0x10a0a4: /* uapi_watchdog_kick -> re-arm */
++        if (g_ws63_wdt_timer) {
++            ws63_wdt_rearm();
++        }
++        break;
++    case 0x109fda: /* uapi_watchdog_disable */
++    case 0x10a00e: /* uapi_watchdog_deinit */
++        if (g_ws63_wdt_timer) {
++            timer_del(g_ws63_wdt_timer);
++        }
++        break;
++    default:
++        ret = 0; /* unknown ROM function: report success */
++        break;
++    }
++
++    g[WS63_A0] = (target_ulong)ret;
++    env->pc = env->gpr[1]; /* return to caller (ra) */
++}
+ 
+ static void riscv_do_nmi(CPURISCVState *env, target_ulong cause, bool virt)
+ {
+@@ -2261,6 +2646,31 @@ void riscv_cpu_do_interrupt(CPUState *cs)
+     bool async = !!(cs->exception_index & RISCV_EXCP_INT_FLAG);
+     target_ulong cause = cs->exception_index & RISCV_EXCP_INT_MASK;
+     uint64_t deleg = async ? env->mideleg : env->medeleg;
++
++    /*
++     * WS63: an illegal-instruction trap whose pc is in the mask-ROM range is a
++     * call into an on-chip ROM function we don't have a binary for. Emulate it
++     * in host C and resume at ra instead of taking the trap. (See ws63_rom_call.)
++     */
++    if (!async && cause == RISCV_EXCP_ILLEGAL_INST &&
++        env->pc >= WS63_ROM_BASE && env->pc < WS63_ROM_END) {
++        ws63_rom_call(env);
++        return;
++    }
++
++    /*
++     * WS63 custom local interrupts (>=32) latch in LOCIPD; on real silicon the
++     * LOCIE-group handler dispatches by IRQ number and clears the source via
++     * LOCIPCLR. Model that by clearing the pending bit when the IRQ is taken
++     * (edge/one-shot delivery). Without this, a device that holds its line
++     * asserted re-delivers forever, because the C SDK acknowledges in software
++     * (group dispatch) rather than at the device. mie-class IRQs 26-31 use the
++     * standard mip path and are left untouched.
++     */
++    if (async && cause >= 32 && cause < 128) {
++        env->ws63_locipd[cause >> 6] &= ~(1ULL << (cause & 63));
++    }
++
+     bool s_injected = env->mvip & (1ULL << cause) & env->mvien &&
+         !(env->mip & (1ULL << cause));
+     bool vs_injected = env->hvip & (1ULL << cause) & env->hvien &&
+diff --git a/target/riscv/translate.c b/target/riscv/translate.c
+index d6651f2..4dcd65a 100644
+--- a/target/riscv/translate.c
++++ b/target/riscv/translate.c
+@@ -1204,14 +1204,24 @@ static uint32_t opcode_at(DisasContextBase *dcbase, target_ulong pc)
+ #include "insn_trans/trans_rvzcmop.c.inc"
+ #include "insn_trans/trans_rvzicfiss.c.inc"
+ 
++/* HiSilicon WS63 "xlinx" custom instruction extensions (must follow
++ * trans_rvzce.c.inc: reuses decode_push_pop_list). */
++#include "insn_trans/trans_xlinx.c.inc"
++
+ /* Include decoders for factored-out extensions */
+ #include "decode-XVentanaCondOps.c.inc"
+ 
+-/* The specification allows for longer insns, but not supported by qemu. */
+-#define MAX_INSN_LEN  4
++/*
++ * The specification allows for longer insns, but only the WS63 "xlinx"
++ * 48-bit l.li is supported by qemu here (marker 0x1f in bits[5:0]).
++ */
++#define MAX_INSN_LEN  6
+ 
+ static inline int insn_len(uint16_t first_word)
+ {
++    if ((first_word & 0x3f) == 0x1f) {
++        return 6; /* xlinx 48-bit (l.li) */
++    }
+     return (first_word & 3) == 3 ? 4 : 2;
+ }
+ 
+@@ -1238,7 +1248,11 @@ static void decode_opc(CPURISCVState *env, DisasContext *ctx, uint16_t opcode)
+             decode_insn16(ctx, opcode)) {
+             return;
+         }
+-    } else {
++        /* WS63 xlinx 16-bit (push/pop/popret, uxtb/uxth) */
++        if (decode_xlinx16(ctx, opcode)) {
++            return;
++        }
++    } else if (ctx->cur_insn_len == 4) {
+         uint32_t opcode32 = opcode;
+         opcode32 = deposit32(opcode32, 16, 16,
+                              translator_lduw(env, &ctx->base,
+@@ -1251,6 +1265,17 @@ static void decode_opc(CPURISCVState *env, DisasContext *ctx, uint16_t opcode)
+                 return;
+             }
+         }
++        /* WS63 xlinx 32-bit (*shf, b*i, muliadd, jal16/j16) */
++        if (decode_xlinx32(ctx, opcode32)) {
++            return;
++        }
++    } else { /* ctx->cur_insn_len == 6: WS63 xlinx 48-bit (l.li) */
++        uint16_t hw1 = translator_lduw(env, &ctx->base, ctx->base.pc_next + 2);
++        uint16_t hw2 = translator_lduw(env, &ctx->base, ctx->base.pc_next + 4);
++        ctx->opcode = opcode | ((uint32_t)hw1 << 16);
++        if (decode_xlinx48(ctx, opcode, hw1 | ((uint32_t)hw2 << 16))) {
++            return;
++        }
+     }
+ 
+     gen_exception_illegal(ctx);
+-- 
+2.43.0
+

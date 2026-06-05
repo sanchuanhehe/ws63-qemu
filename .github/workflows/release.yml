@@ -13,7 +13,7 @@ permissions:
   contents: write
 
 env:
-  QEMU_TAG: v9.2.4
+  QEMU_TAG: v10.0.0
 
 jobs:
   release:

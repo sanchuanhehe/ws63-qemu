@@ -1,0 +1,29 @@
+From 9973715060d1fe3348514b4924b1b55159c591b5 Mon Sep 17 00:00:00 2001
+From: ws63-rs <noreply@anthropic.com>
+Date: Fri, 5 Jun 2026 12:37:25 +0800
+Subject: [PATCH 2/2] tests/qtest: register the ws63-test register-level
+ regression
+
+Add ws63-test to qtests_riscv32 (ws63-test.c copied into the tree). (v9.2.x.)
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+---
+ tests/qtest/meson.build | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/tests/qtest/meson.build b/tests/qtest/meson.build
+index bd41c9d..8f7bf4b 100644
+--- a/tests/qtest/meson.build
++++ b/tests/qtest/meson.build
+@@ -269,7 +269,7 @@ qtests_s390x = \
+    'cpu-plug-test',
+    'migration-test']
+ 
+-qtests_riscv32 = \
++qtests_riscv32 = ['ws63-test'] + \
+   (config_all_devices.has_key('CONFIG_SIFIVE_E_AON') ? ['sifive-e-aon-watchdog-test'] : [])
+ 
+ qtests_riscv64 = \
+-- 
+2.43.0
+

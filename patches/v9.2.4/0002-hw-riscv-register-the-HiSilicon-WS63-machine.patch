@@ -1,0 +1,55 @@
+From f9285b414d6fd72c18f6c8967ae3f0d10ef53ffe Mon Sep 17 00:00:00 2001
+From: ws63-rs <noreply@anthropic.com>
+Date: Fri, 5 Jun 2026 12:37:25 +0800
+Subject: [PATCH 1/2] hw/riscv: register the HiSilicon WS63 machine
+
+Build-system integration for hw/riscv/ws63.c (copied into the tree): CONFIG_WS63
+meson source entry, Kconfig symbol, ws63_* trace events. (QEMU v9.2.x context.)
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+---
+ hw/riscv/Kconfig      | 6 ++++++
+ hw/riscv/meson.build  | 1 +
+ hw/riscv/trace-events | 5 +++++
+ 3 files changed, 12 insertions(+)
+
+diff --git a/hw/riscv/Kconfig b/hw/riscv/Kconfig
+index 2e88467..be23bf1 100644
+--- a/hw/riscv/Kconfig
++++ b/hw/riscv/Kconfig
+@@ -111,3 +111,9 @@ config SPIKE
+     select HTIF
+     select RISCV_ACLINT
+     select SIFIVE_PLIC
++
++config WS63
++    bool
++    default y
++    depends on RISCV32
++    select UNIMP
+diff --git a/hw/riscv/meson.build b/hw/riscv/meson.build
+index adbef8a..aa9d2f5 100644
+--- a/hw/riscv/meson.build
++++ b/hw/riscv/meson.build
+@@ -12,4 +12,5 @@ riscv_ss.add(when: 'CONFIG_MICROCHIP_PFSOC', if_true: files('microchip_pfsoc.c')
+ riscv_ss.add(when: 'CONFIG_ACPI', if_true: files('virt-acpi-build.c'))
+ riscv_ss.add(when: 'CONFIG_RISCV_IOMMU', if_true: files('riscv-iommu.c', 'riscv-iommu-pci.c'))
+ 
++riscv_ss.add(when: 'CONFIG_WS63', if_true: files('ws63.c'))
+ hw_arch += {'riscv': riscv_ss}
+diff --git a/hw/riscv/trace-events b/hw/riscv/trace-events
+index 0527c56..9249d72 100644
+--- a/hw/riscv/trace-events
++++ b/hw/riscv/trace-events
+@@ -15,3 +15,8 @@ riscv_iommu_icvec_write(uint32_t orig, uint32_t actual) "ICVEC write: incoming 0
+ riscv_iommu_ats(const char *id, unsigned b, unsigned d, unsigned f, uint64_t iova) "%s: translate request %04x:%02x.%u iova: 0x%"PRIx64
+ riscv_iommu_ats_inval(const char *id) "%s: dev-iotlb invalidate"
+ riscv_iommu_ats_prgr(const char *id) "%s: dev-iotlb page request group response"
++
++# --- HiSilicon WS63 SoC model (ws63.c) ---
++ws63_gpio_set(uint32_t out) "GPIO DATA_SET out=0x%08x"
++ws63_gpio_clr(uint32_t out) "GPIO DATA_CLR out=0x%08x"
++ws63_dma_xfer(int ch, unsigned fc, unsigned sper, unsigned dper, uint32_t src, uint32_t dst, unsigned items, unsigned width) "DMA ch%d fc=%u sper=%u dper=%u src=0x%08x dst=0x%08x items=%u width=%u"
+-- 
+2.43.0
+

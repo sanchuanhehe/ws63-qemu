@@ -38,6 +38,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `reboot_porting.c`. Validates the ws63-rs `System::software_reset` / `reset_reason`
   rewrite: the new `reset_demo` example round-trips cold-boot → reset → Software, and
   `scripts/smoke-test.sh` asserts it (CI now builds all default-member examples).
+- **Connectivity base** (ROADMAP §5): synthetic Wi-Fi/Ethernet MAC (`ws63-netmac`
+  @ 0x44210000, IRQ 45) bridging the ws63-rf-rs netif seam to a host netdev via
+  SLIRP (`--enable-slirp`, `libslirp-dev`); no RF/PHY. qtest `/ws63/netmac` does a
+  real frame round-trip; the ws63-rs `net_ping` example ARP/ICMP/UDPs over the
+  SLIRP NAT; `scripts/smoke-test.sh` asserts `NET PING: PASS`.
+- **qtest matrix** (`.github/workflows/qtest-matrix.yml`): runs the register-level
+  qtest across every supported QEMU version (required) plus the newest stable
+  (experimental forward-compat radar). Weekly cron.
+
+### Changed
+- **Rebased to QEMU v10.0.0** (default; up from v9.2.4) and **migrated the
+  injection to a per-version `git format-patch` series** under `patches/<QEMU_TAG>/`,
+  replacing the single `ws63-target-riscv.patch` + the sed/cat-append hooks in
+  `scripts/build.sh`. New files (`ws63.c`, the xlinx decoder, the qtest) are copied
+  from `src/`; edits to existing QEMU files are the series (`0001` target/riscv,
+  `0002` machine registration, `0003` qtest registration; older versions add a
+  `0004` compat patch for the copied `ws63.c`). **Both v10.0.0 and v9.2.4 are
+  maintained** — each verified to apply, build, and pass qtest 5/5. v10 API changes
+  handled: `sysemu/`→`system/` headers, `Property[]` dropped the
+  `DEFINE_PROP_END_OF_LIST` terminator and became `const`. See `patches/README.md`.
 
 ## [0.3.0] - 2026-06-01
 

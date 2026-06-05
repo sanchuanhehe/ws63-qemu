@@ -1,7 +1,7 @@
 # ws63-qemu 用户手册
 
 本手册面向 **使用** ws63-qemu 的人,覆盖三部分:**安装**、**使用与注意事项**、**当前验证覆盖范围**。
-适用版本:**v0.3.0**(`qemu-system-riscv32 -M ws63`,QEMU v9.2.4 fork + HiSilicon xlinx 自定义 ISA)。
+适用版本:**v0.3.0**(`qemu-system-riscv32 -M ws63`,QEMU v10.0.0 fork〔另维护 v9.2.4〕 + HiSilicon xlinx 自定义 ISA)。
 
 > 它是什么:在无 WS63 硬件(EVB)的情况下,运行**未经修改的、厂商/工具链编译的 WS63 固件**——既能跑
 > [`ws63-rs`](https://github.com/sanchuanhehe/ws63-rs)(Rust 裸机),也能跑 fbb_ws63 **C SDK**(flashboot +
@@ -81,13 +81,14 @@ bash scripts/build.sh
 
 `build.sh` 做的事(**幂等**,可反复运行做增量构建):
 
-1. 浅克隆 QEMU `v9.2.4`(`QEMU_TAG` 可改)到 `./qemu/`;
-2. 注入板卡源 `src/hw/riscv/ws63.c` 和 xlinx 解码器 `trans_xlinx.c.inc`;
-3. 应用 `patches/ws63-target-riscv.patch`(自定义本地中断 IRQ≥32 投递 + xlinx ISA 钩子);
-4. 在 meson/Kconfig 注册 `CONFIG_WS63`;
-5. `./configure --target-list=riscv32-softmmu` 后 `make`。
+1. 浅克隆 QEMU `$QEMU_TAG`(默认 `v10.0.0`,可改)到 `./qemu/`;若无 `patches/$QEMU_TAG/` 则报错列出已支持版本;
+2. 拷入新文件:板卡源 `src/hw/riscv/ws63.c`、xlinx 解码器 `trans_xlinx.c.inc`、qtest `ws63-test.c`;
+3. 应用该版本的 patch-series `patches/$QEMU_TAG/0001..*.patch`(对既有 QEMU 文件的改动:`0001` target/riscv 核 = 本地中断
+   IRQ≥32 投递 + `-cpu ws63` + xlinx ISA 钩子 + ROM 拦截;`0002` 注册机器 = meson/Kconfig/trace-events;`0003` 注册 qtest;
+   旧版本另带 `0004` 适配 ws63.c 的旧 API);
+4. `./configure --target-list=riscv32-softmmu --enable-slirp` 后 `make`。
 
-构建相关环境变量:`QEMU_TAG`(默认 `v9.2.4`)、`QEMU_DIR`(默认 `<repo>/qemu`)、`QEMU_REPO`、`JOBS`(默认 `nproc`)。
+构建相关环境变量:`QEMU_TAG`(默认 `v10.0.0`;另维护 `v9.2.4`)、`QEMU_DIR`(默认 `<repo>/qemu`)、`QEMU_REPO`、`JOBS`(默认 `nproc`)。
 
 **验证安装**:
 
@@ -228,7 +229,8 @@ bash scripts/qtest.sh          # 构建 tests/qtest/ws63-test 并运行(4 例,TA
 
 6. **目标核 = 单核 RV32IMFC。** 单浮点(`F`)、压缩(`C`)、**无原子(`A`关)**、**无 `D`**;WS63 是**单核**(无第二 hart)。
 
-7. **QEMU 固定 v9.2.4。** 升级到 v10.x 需注意上游 API 变化(`class_init` 签名、`sysemu/`→`system/` 头改名等)。
+7. **QEMU 默认 v10.0.0,另维护 v9.2.4**(按 `patches/<tag>/` 分目录)。已处理的上游 API 变化:`sysemu/`→`system/` 头改名、
+   `Property[]` 去终止符并改 `const`。再升级(v10.1/10.2)按 `patches/README.md` 补对应版本序列。
 
 ---
 

@@ -44,9 +44,9 @@
 #include "chardev/char-fe.h"
 #include "target/riscv/cpu.h"
 #include "hw/core/cpu.h"
-#include "sysemu/sysemu.h"
-#include "sysemu/reset.h"
-#include "sysemu/runstate.h"
+#include "system/system.h"
+#include "system/reset.h"
+#include "system/runstate.h"
 #include "exec/address-spaces.h"
 #include "elf.h"
 #include "trace.h"     /* generated from hw/riscv/trace-events (ws63_* events) */
@@ -411,9 +411,8 @@ static void ws63_uart_realize(DeviceState *dev, Error **errp)
                              ws63_uart_event, NULL, s, NULL, true);
 }
 
-static Property ws63_uart_properties[] = {
+static const Property ws63_uart_properties[] = {
     DEFINE_PROP_CHR("chardev", WS63UartState, chr),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
 static void ws63_uart_instance_init(Object *obj)
@@ -1783,9 +1782,8 @@ static void ws63_netmac_realize(DeviceState *dev, Error **errp)
     qemu_format_nic_info_str(qemu_get_queue(s->nic), s->conf.macaddr.a);
 }
 
-static Property ws63_netmac_props[] = {
+static const Property ws63_netmac_props[] = {
     DEFINE_NIC_PROPERTIES(WS63NetMacState, conf),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
 static void ws63_netmac_class_init(ObjectClass *klass, void *data)

@@ -1,0 +1,57 @@
+From 72bf4b7be998a39bb892e9acf67463bd037eb00f Mon Sep 17 00:00:00 2001
+From: ws63-rs <noreply@anthropic.com>
+Date: Fri, 5 Jun 2026 12:16:25 +0800
+Subject: [PATCH 2/3] hw/riscv: register the HiSilicon WS63 machine
+
+Build-system integration for hw/riscv/ws63.c (copied into the tree alongside
+this series): the CONFIG_WS63 meson source entry, the Kconfig symbol (default y
+on RISCV32, selects UNIMP), and the ws63_* trace events. Replaces the prior
+sed/append injection in scripts/build.sh with a reviewable patch.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+---
+ hw/riscv/Kconfig      | 6 ++++++
+ hw/riscv/meson.build  | 1 +
+ hw/riscv/trace-events | 5 +++++
+ 3 files changed, 12 insertions(+)
+
+diff --git a/hw/riscv/Kconfig b/hw/riscv/Kconfig
+index e6a0ac1..d3237e5 100644
+--- a/hw/riscv/Kconfig
++++ b/hw/riscv/Kconfig
+@@ -119,3 +119,9 @@ config SPIKE
+     select HTIF
+     select RISCV_ACLINT
+     select SIFIVE_PLIC
++
++config WS63
++    bool
++    default y
++    depends on RISCV32
++    select UNIMP
+diff --git a/hw/riscv/meson.build b/hw/riscv/meson.build
+index c22f3a7..fc57f32 100644
+--- a/hw/riscv/meson.build
++++ b/hw/riscv/meson.build
+@@ -14,4 +14,5 @@ riscv_ss.add(when: 'CONFIG_RISCV_IOMMU', if_true: files(
+ 	'riscv-iommu.c', 'riscv-iommu-pci.c', 'riscv-iommu-sys.c', 'riscv-iommu-hpm.c'))
+ riscv_ss.add(when: 'CONFIG_MICROBLAZE_V', if_true: files('microblaze-v-generic.c'))
+ 
++riscv_ss.add(when: 'CONFIG_WS63', if_true: files('ws63.c'))
+ hw_arch += {'riscv': riscv_ss}
+diff --git a/hw/riscv/trace-events b/hw/riscv/trace-events
+index b50b14a..4e9ed24 100644
+--- a/hw/riscv/trace-events
++++ b/hw/riscv/trace-events
+@@ -24,3 +24,8 @@ riscv_iommu_hpm_incr_ctr(uint64_t cntr_val) "cntr_val 0x%"PRIx64
+ riscv_iommu_hpm_iocntinh_cy(bool prev_cy_inh) "prev_cy_inh %d"
+ riscv_iommu_hpm_cycle_write(uint32_t ovf, uint64_t val) "ovf 0x%x val 0x%"PRIx64
+ riscv_iommu_hpm_evt_write(uint32_t ctr_idx, uint32_t ovf, uint64_t val) "ctr_idx 0x%x ovf 0x%x val 0x%"PRIx64
++
++# --- HiSilicon WS63 SoC model (ws63.c) ---
++ws63_gpio_set(uint32_t out) "GPIO DATA_SET out=0x%08x"
++ws63_gpio_clr(uint32_t out) "GPIO DATA_CLR out=0x%08x"
++ws63_dma_xfer(int ch, unsigned fc, unsigned sper, unsigned dper, uint32_t src, uint32_t dst, unsigned items, unsigned width) "DMA ch%d fc=%u sper=%u dper=%u src=0x%08x dst=0x%08x items=%u width=%u"
+-- 
+2.43.0
+

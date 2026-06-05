@@ -2,14 +2,16 @@ name: qtest-matrix
 
 # Boot-free, register-level qtest regression (tests/qtest/ws63-test) across a
 # MATRIX of QEMU base releases. This is the phase-6 maintainability radar: the
-# WS63 model is an out-of-tree overlay (hw/riscv/ws63.c + a target/riscv patch +
-# the xlinx decoder .inc, injected by scripts/build.sh). The #1 maintenance risk
-# is a new QEMU release shifting the files the patch touches. Pinning the qtest
-# to one version hides that; running it across versions catches drift early.
+# WS63 model is an out-of-tree overlay (the copied ws63.c / xlinx decoder / qtest
+# + a PER-VERSION patch-series under patches/<tag>/, applied by scripts/build.sh).
+# The #1 maintenance risk is a new QEMU release shifting the files the series
+# touches; each supported version therefore keeps its own series, and this matrix
+# proves every supported version still applies/builds/passes.
 #
-# - Pinned + same-LTS-minor cells are REQUIRED (the patch applies, must stay green).
-# - Newer majors are EXPERIMENTAL (continue-on-error): a failure there is the
-#   "time to rebase the target/riscv patch" signal, not a merge blocker.
+# - A version with a patches/<tag>/ dir is REQUIRED (must stay green).
+# - A newer version with no series yet is EXPERIMENTAL (continue-on-error):
+#   build.sh fails "not ported", which is the "add patches/<tag>/" signal — not a
+#   merge blocker.
 #
 # The qtest needs no Rust toolchain and boots no firmware — it drives the device
 # models directly over MMIO — so each cell is just: deps -> build QEMU -> qtest.
@@ -38,16 +40,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Pinned baseline — the version the overlay + patch target. Blocking.
-          - qemu_tag: v9.2.4
+          # Supported versions — each has its own series under patches/<tag>/, both
+          # verified to apply, build, and pass qtest. Blocking.
+          - qemu_tag: v10.0.0   # current default baseline
             required: true
-          # Same LTS minor: proves the overlay isn't pinned to a v9.2.4-only quirk
-          # (the patch applies across the 9.2.x line). Blocking.
-          - qemu_tag: v9.2.0
+          - qemu_tag: v9.2.4    # previous pin, kept maintained
             required: true
-          # Next major — forward-compat radar. The target/riscv patch is expected
-          # to need a rebase here (cpu-qom.h / cpu.h moved); allowed to fail.
-          - qemu_tag: v10.0.0
+          # Newest stable — forward-compat radar. No patches/v10.2.3/ yet (target/
+          # riscv + hw/riscv churned after 10.0), so build.sh fails "not ported";
+          # allowed to fail. A red cell is the "port the series to the next QEMU"
+          # signal. Add patches/v10.2.3/ to turn it green.
+          - qemu_tag: v10.2.3
             required: false
 
     steps:
