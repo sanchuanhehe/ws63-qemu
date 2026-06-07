@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`-M bs21` — HiSilicon BS21 / BS2X machine (multi-chip family, milestone 1).**
+  BS21 is a BLE 5.4 + SLE (NearLink) SoC, no Wi-Fi, on the *same* HiSilicon
+  "HimiDeer" riscv31 core as WS63 (identical LOCI interrupt architecture + custom
+  CSRs, identical UART v151 / TIMER v150 / GPIO v150 IP). So the new `bs21.c`
+  machine **reuses ws63.c's device models in place** — exposed via a new shared
+  header `hw/riscv/hisi_riscv31.h` (the WS63 INTC/UART/TIMER/GPIO/TCXO type names
+  + `ws63_make_ram` / `ws63_register_custom_csrs` / `ws63_intc_set_cpu_env`) — at
+  BS21's own memory map + base addresses + IRQ numbers (docs/bs21-recon.md, from
+  the fbb_bs2x SDK). `CONFIG_BS21` (Kconfig + meson, patch `000N-...bs21...`)
+  `select`s `CONFIG_WS63` so the shared models compile in; `build.sh` copies
+  `bs21.c` + `hisi_riscv31.h`. M1 firmware (ws63-rs `bs21-examples/{blinky,
+  uart_hello}`, `--features chip-bs21`) emits only standard RV32IMFC and never
+  calls the mask ROM, so this machine needs **neither** the HiSilicon custom-ISA
+  decoder **nor** ROM interception (both deferred with connectivity). Validated
+  on v10.0.0: `scripts/bs21-smoke-test.sh` boots both examples (UART0 @ 0x52081000
+  banner; GPIO0 @ 0x57010000 toggle, 0 illegal-instruction traps). WS63 unchanged
+  — `-M ws63` boots + all 5 qtests still pass. The full family split (shared models
+  → `hisi_riscv31.c` under `CONFIG_HISI_RISCV31`, ROM-ABI machine callback, and the
+  `hisi-riscv31` CPU rename) is deferred to the connectivity-generalization pass.
 - **Phase 1 test/dev infrastructure complete** (ROADMAP §1):
   - **qtest** (`tests/qtest/ws63-test.c`, run via `scripts/qtest.sh`, in CI) — a
     register-level, boot-free regression that drives the GPIO/UART/timer/INTC/DMA

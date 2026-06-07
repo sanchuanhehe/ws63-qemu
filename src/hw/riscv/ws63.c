@@ -50,6 +50,7 @@
 #include "exec/address-spaces.h"
 #include "elf.h"
 #include "trace.h"     /* generated from hw/riscv/trace-events (ws63_* events) */
+#include "hisi_riscv31.h" /* shared device-model type names + helpers (reused by bs21.c) */
 
 /* ----------------------------------------------------------------------------
  * Memory map — from ws63-rt/memory.x, which is a faithful transcription of the
@@ -124,7 +125,7 @@
 /* ============================================================================
  * Forward decls
  * ========================================================================= */
-#define TYPE_WS63_INTC "ws63-intc"
+/* TYPE_WS63_INTC defined in hisi_riscv31.h (shared with bs21.c). */
 OBJECT_DECLARE_SIMPLE_TYPE(WS63IntcState, WS63_INTC)
 
 struct WS63IntcState {
@@ -170,6 +171,14 @@ static void ws63_intc_realize(DeviceState *dev, Error **errp)
 
     qdev_init_gpio_in(dev, ws63_intc_set_irq, WS63_IRQ_MAX);
     g_ws63_intc = s;
+}
+
+/* Exposed via hisi_riscv31.h: let a machine point the intc at its hart after the
+ * CPU is realized (env is consulted only at IRQ-delivery time). Used by bs21.c;
+ * ws63.c sets s->intc.env directly since it owns the struct. */
+void ws63_intc_set_cpu_env(DeviceState *intc, CPURISCVState *env)
+{
+    WS63_INTC(intc)->env = env;
 }
 
 static void ws63_intc_class_init(ObjectClass *oc, void *data)
@@ -298,7 +307,8 @@ static riscv_csr_operations ws63_csr_loci = {
     .read = ws63_loci_read, .write = ws63_loci_write,
 };
 
-static void ws63_register_custom_csrs(void)
+/* Exposed via hisi_riscv31.h so bs21.c reuses the identical LOCI/vendor CSRs. */
+void ws63_register_custom_csrs(void)
 {
     int n;
     for (n = 0x7c0; n <= 0x7ff; n++) {
@@ -315,7 +325,7 @@ static void ws63_register_custom_csrs(void)
 /* ============================================================================
  * WS63 UART — HiSilicon custom register layout (NOT 16550-compatible).
  * ========================================================================= */
-#define TYPE_WS63_UART "ws63-uart"
+/* TYPE_WS63_UART defined in hisi_riscv31.h (shared with bs21.c). */
 OBJECT_DECLARE_SIMPLE_TYPE(WS63UartState, WS63_UART)
 
 #define UART_DATA           0x04
@@ -447,7 +457,7 @@ static const TypeInfo ws63_uart_typeinfo = {
  * +0x10 (en[0], mode[2:1], int_mask[3]), EOI +0x14, RAW_INTR +0x18.
  * Globals: EOI_REN 0x78, RAW_STAT 0x7C, INTR_STAT 0x80.
  * ========================================================================= */
-#define TYPE_WS63_TIMER "ws63-timer"
+/* TYPE_WS63_TIMER defined in hisi_riscv31.h (shared with bs21.c). */
 OBJECT_DECLARE_SIMPLE_TYPE(WS63TimerState, WS63_TIMER)
 
 #define TMR_CONTROL_EN      (1u << 0)
@@ -707,7 +717,7 @@ static const TypeInfo ws63_timer_typeinfo = {
  * 0x18 INT_POL, 0x1C INT_DEDGE, 0x24 INT_RAW(ro), 0x28 INTR(ro),
  * 0x2C INT_EOI(wo, w1c), 0x30 DATA_SET(wo, w1s), 0x34 DATA_CLR(wo, w1c).
  * ========================================================================= */
-#define TYPE_WS63_GPIO "ws63-gpio"
+/* TYPE_WS63_GPIO defined in hisi_riscv31.h (shared with bs21.c). */
 OBJECT_DECLARE_SIMPLE_TYPE(WS63GpioState, WS63_GPIO)
 
 #define WS63_GPIO_PINS 8        /* pins exposed as external signal nets */
@@ -938,7 +948,7 @@ static const TypeInfo ws63_sysctl0_typeinfo = {
  * for us-resolution timekeeping. Model bit4 as always-set and back the count with
  * the QEMU virtual clock at the nominal 24 MHz so delays/timeouts terminate.
  * ========================================================================= */
-#define TYPE_WS63_TCXO "ws63-tcxo"
+/* TYPE_WS63_TCXO defined in hisi_riscv31.h (shared with bs21.c). */
 OBJECT_DECLARE_SIMPLE_TYPE(WS63TcxoState, WS63_TCXO)
 
 #define WS63_TCXO_BASE      0x44000000
@@ -1828,8 +1838,9 @@ struct WS63MachineState {
     MemoryRegion ppb;
 };
 
-static void ws63_make_ram(MemoryRegion *sys, MemoryRegion *mr,
-                          const char *name, hwaddr base, uint64_t size)
+/* Exposed via hisi_riscv31.h so bs21.c builds its own memory map. */
+void ws63_make_ram(MemoryRegion *sys, MemoryRegion *mr,
+                   const char *name, hwaddr base, uint64_t size)
 {
     memory_region_init_ram(mr, NULL, name, size, &error_fatal);
     memory_region_add_subregion(sys, base, mr);

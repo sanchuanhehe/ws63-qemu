@@ -1,0 +1,43 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ws63-rs <noreply@anthropic.com>
+Date: Sun, 7 Jun 2026 16:00:00 +0800
+Subject: [PATCH] hw/riscv: register the HiSilicon BS21 machine
+
+Build-system integration for hw/riscv/bs21.c (the BS21 / BS2X machine, copied
+into the tree alongside this series). bs21.c reuses the shared HiSilicon riscv31
+device models from ws63.c via hisi_riscv31.h, so CONFIG_BS21 selects CONFIG_WS63
+(which compiles ws63.c and the shared models). The full split into a dedicated
+CONFIG_HISI_RISCV31 source set + the `hisi-riscv31` CPU rename is deferred to the
+connectivity-generalization pass.
+
+Adds the CONFIG_BS21 meson source entry and the Kconfig symbol (default y on
+RISCV32, selects UNIMP + WS63). Registers `-M bs21`.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+---
+ hw/riscv/Kconfig     | 6 ++++++
+ hw/riscv/meson.build | 1 +
+ 2 files changed, 7 insertions(+)
+
+diff --git a/hw/riscv/Kconfig b/hw/riscv/Kconfig
+--- a/hw/riscv/Kconfig
++++ b/hw/riscv/Kconfig
+@@ -126,3 +126,9 @@ config WS63
+     depends on RISCV32
+     select UNIMP
+
++config BS21
++    bool
++    default y
++    depends on RISCV32
++    select UNIMP
++    select WS63
+diff --git a/hw/riscv/meson.build b/hw/riscv/meson.build
+--- a/hw/riscv/meson.build
++++ b/hw/riscv/meson.build
+@@ -15,4 +15,5 @@ riscv_ss.add(when: 'CONFIG_RISCV_IOMMU', if_true: files(
+ riscv_ss.add(when: 'CONFIG_MICROBLAZE_V', if_true: files('microblaze-v-generic.c'))
+
+ riscv_ss.add(when: 'CONFIG_WS63', if_true: files('ws63.c'))
++riscv_ss.add(when: 'CONFIG_BS21', if_true: files('bs21.c'))
+ hw_arch += {'riscv': riscv_ss}

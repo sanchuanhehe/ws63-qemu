@@ -43,8 +43,12 @@ fi
 #    authoring copy) rather than being carried as patches. ws63.c is the machine,
 #    trans_xlinx.c.inc the custom-ISA decoder (#included by translate.c via the
 #    series), ws63-test.c the boot-free register-level qtest.
-echo "==> copying WS63 sources (machine, xlinx decoder, qtest)"
+echo "==> copying WS63 + BS21 sources (machines, shared models, xlinx decoder, qtest)"
 cp "$HERE/src/hw/riscv/ws63.c"                            "$QEMU_DIR/hw/riscv/ws63.c"
+# Shared HiSilicon riscv31 device-model declarations + the BS21 machine. bs21.c
+# reuses ws63.c's device models via hisi_riscv31.h (CONFIG_BS21 selects CONFIG_WS63).
+cp "$HERE/src/hw/riscv/hisi_riscv31.h"                    "$QEMU_DIR/hw/riscv/hisi_riscv31.h"
+cp "$HERE/src/hw/riscv/bs21.c"                            "$QEMU_DIR/hw/riscv/bs21.c"
 cp "$HERE/src/target/riscv/insn_trans/trans_xlinx.c.inc" "$QEMU_DIR/target/riscv/insn_trans/trans_xlinx.c.inc"
 cp "$HERE/src/tests/qtest/ws63-test.c"                    "$QEMU_DIR/tests/qtest/ws63-test.c"
 
