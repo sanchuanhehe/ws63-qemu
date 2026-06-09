@@ -1,0 +1,143 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ws63-rs <noreply@anthropic.com>
+Date: Sun, 9 Jun 2026 15:00:00 +0800
+Subject: [PATCH] target/riscv: BS21/BS2X mask-ROM call emulation (bs21_rom_call)
+
+Mirror ws63_rom_call for the BS21/BS2X ROM ABI. Adds the BS21 ROM range
+(0x10000..0x40000, from the fbb_bs2x acore_rom_n1200.sym; DISJOINT from the WS63
+range and from where the BS2X boot stages load+run at 0x40000+, so the illegal-
+instruction hook dispatches WS63 vs BS21 purely by pc) and bs21_rom_call(), which
+emulates the secure-libc set the BS2X boot stages call (memset_s 0x3d80c,
+memcpy_s 0x3e07e, memmove_s 0x3e95c, sprintf_s 0x3ef18, snprintf_s 0x3ef60,
+vsnprintf_s 0x3ef92) — the printf family reuses the chip-neutral ws63_vformat()
+helper. Validated: a call to 0x3d80c on -M bs21 is intercepted, memset_s runs,
+execution resumes at ra. WS63 path unchanged (5/5 qtests + M1 still pass).
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+---
+ target/riscv/cpu_helper.c | 100 +++++++++
+ 1 file changed, 100 insertions(+)
+
+diff --git a/target/riscv/cpu_helper.c b/target/riscv/cpu_helper.c
+--- a/target/riscv/cpu_helper.c
++++ b/target/riscv/cpu_helper.c
+@@ -2300,6 +2300,15 @@
+  */
+ #define WS63_ROM_BASE 0x00109000u
+ #define WS63_ROM_END  0x0014C000u
++/*
++ * BS21/BS2X mask-ROM range. The ROM functions live in the low ROM region
++ * (romboot/SFC ~0x102ec.., acore secure-libc 0x3d80c..0x3ef92; see the fbb_bs2x
++ * acore_rom_n1200.sym). It is DISJOINT from the WS63 range above AND from where
++ * the BS2X boot stages load+run (0x40000+, APP_ITCM_ORIGIN), so the same illegal-
++ * instruction hook can dispatch WS63 vs BS21 purely by pc, no machine flag.
++ */
++#define BS21_ROM_BASE 0x00010000u
++#define BS21_ROM_END  0x00040000u
+ /* Scratch RAM (in the PPB region, past the SCS) for ROM vtables we synthesize. */
+ #define WS63_ROM_SCRATCH 0xE000F000u
+ enum { WS63_A0 = 10, WS63_A1, WS63_A2, WS63_A3, WS63_A4, WS63_A5, WS63_A6, WS63_A7 };
+@@ -2605,6 +2614,91 @@
+     env->pc = env->gpr[1]; /* return to caller (ra) */
+ }
+ 
++/*
++ * BS21/BS2X mask-ROM call emulation. Same mechanism as ws63_rom_call, with BS21
++ * function addresses (fbb_bs2x acore_rom_n1200.sym). The secure-libc set is what
++ * the BS2X boot stages (flashboot/app) call most; the printf family reuses the
++ * chip-neutral ws63_vformat()/WS63Args helpers verbatim. systick/tcxo/sfc/watchdog
++ * ROM APIs are not mapped yet (their BS21 addresses differ) and fall through to
++ * the success stub. (loaderboot itself makes no ROM calls — it is self-contained;
++ * this serves the later stages.)
++ */
++static void bs21_rom_call(CPURISCVState *env)
++{
++    uint32_t pc = env->pc;
++    target_ulong *g = env->gpr;
++    long ret = 0;
++
++    switch (pc) {
++    case 0x3d80c: { /* memset_s(dst, dmax, c, n) */
++        uint32_t dst = g[WS63_A0], dmax = g[WS63_A1], n = g[WS63_A3];
++        uint8_t c = (uint8_t)g[WS63_A2];
++        if (n > dmax) { ret = -1; break; }
++        for (uint32_t k = 0; k < n; k++) {
++            cpu_physical_memory_write(dst + k, &c, 1);
++        }
++        break;
++    }
++    case 0x3e07e: { /* memcpy_s(dst, dmax, src, n) */
++        uint32_t dst = g[WS63_A0], dmax = g[WS63_A1], src = g[WS63_A2], n = g[WS63_A3];
++        if (n > dmax) { ret = -1; break; }
++        for (uint32_t k = 0; k < n; k++) {
++            uint8_t b;
++            cpu_physical_memory_read(src + k, &b, 1);
++            cpu_physical_memory_write(dst + k, &b, 1);
++        }
++        break;
++    }
++    case 0x3e95c: { /* memmove_s(dst, dmax, src, n) */
++        uint32_t dst = g[WS63_A0], dmax = g[WS63_A1], src = g[WS63_A2], n = g[WS63_A3];
++        if (n > dmax) { ret = -1; break; }
++        uint8_t *t = g_malloc(n ? n : 1);
++        cpu_physical_memory_read(src, t, n);
++        cpu_physical_memory_write(dst, t, n);
++        g_free(t);
++        break;
++    }
++    case 0x3ef18: { /* sprintf_s(dst, dmax, fmt, ...) */
++        uint32_t dst = g[WS63_A0], dmax = g[WS63_A1];
++        char buf[512];
++        WS63Args a = { env, WS63_A3, 0, false };
++        int len = ws63_vformat(buf, sizeof(buf), g[WS63_A2], &a);
++        if (dmax && (uint32_t)len >= dmax) { len = dmax - 1; }
++        cpu_physical_memory_write(dst, buf, len + 1);
++        ret = len;
++        break;
++    }
++    case 0x3ef60: { /* snprintf_s(dst, dmax, count, fmt, ...) */
++        uint32_t dst = g[WS63_A0], dmax = g[WS63_A1], count = g[WS63_A2];
++        char buf[512];
++        WS63Args a = { env, WS63_A4, 0, false };
++        int len = ws63_vformat(buf, sizeof(buf), g[WS63_A3], &a);
++        uint32_t cap = (count < dmax) ? count : dmax;
++        if (cap && (uint32_t)len >= cap) { len = cap - 1; }
++        cpu_physical_memory_write(dst, buf, len + 1);
++        ret = len;
++        break;
++    }
++    case 0x3ef92: { /* vsnprintf_s(dst, dmax, count, fmt, va_list) */
++        uint32_t dst = g[WS63_A0], dmax = g[WS63_A1], count = g[WS63_A2];
++        char buf[512];
++        WS63Args a = { env, 0, g[WS63_A4], true };
++        int len = ws63_vformat(buf, sizeof(buf), g[WS63_A3], &a);
++        uint32_t cap = (count < dmax) ? count : dmax;
++        if (cap && (uint32_t)len >= cap) { len = cap - 1; }
++        cpu_physical_memory_write(dst, buf, len + 1);
++        ret = len;
++        break;
++    }
++    default:
++        ret = 0; /* unmapped ROM function: report success */
++        break;
++    }
++
++    g[WS63_A0] = (target_ulong)ret;
++    env->pc = env->gpr[1]; /* return to caller (ra) */
++}
++
+ static void riscv_do_nmi(CPURISCVState *env, target_ulong cause, bool virt)
+ {
+     env->mnstatus = set_field(env->mnstatus, MNSTATUS_NMIE, false);
+@@ -2657,6 +2751,11 @@
+         ws63_rom_call(env);
+         return;
+     }
++    if (!async && cause == RISCV_EXCP_ILLEGAL_INST &&
++        env->pc >= BS21_ROM_BASE && env->pc < BS21_ROM_END) {
++        bs21_rom_call(env);
++        return;
++    }
+ 
+     /*
+      * WS63 custom local interrupts (>=32) latch in LOCIPD; on real silicon the

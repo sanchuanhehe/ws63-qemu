@@ -37,7 +37,26 @@ real BS21 DTCM (`APP_DTCM_ORIGIN`, len `0x10000`). `bs21.c` had wrongly placed
 DTCM at `0xF0000`; loaderboot faulted writing to `0x20002d50`. Fixed: DTCM →
 `0x20000000`, ITCM window → `0x80000..0x100000`. (M1 + WS63 qtests unaffected.)
 
-## BS21 ROM table (for a future `bs21_rom_call`)
+## `bs21_rom_call` — IMPLEMENTED (patches/v10.0.0/0005)
+
+The ROM-call interceptor is now in place (mirrors `ws63_rom_call`, dispatched by
+the disjoint PC range). It emulates the secure-libc set the BS2X boot stages call:
+`memset_s 0x3d80c`, `memcpy_s 0x3e07e`, `memmove_s 0x3e95c`, `sprintf_s 0x3ef18`,
+`snprintf_s 0x3ef60`, `vsnprintf_s 0x3ef92` (the printf family reuses the
+chip-neutral `ws63_vformat()`). **Validated**: a synthetic test that `jalr`s to
+`0x3d80c` (memset_s) on `-M bs21` is intercepted, the buffer is correctly filled,
+and execution resumes at `ra` — serial prints `XA` (X = UART, A = the memset'd
+byte). WS63 unchanged (5/5 qtests + M1 still pass). systick/tcxo/SFC/watchdog ROM
+APIs are not mapped yet (their BS21 addresses differ) — they fall through to the
+success stub. `cpu_helper.c` is version-volatile, so 0005 is on v10.0.0 (the
+build.sh default); other QEMU versions need it rebased.
+
+> **Note on loaderboot**: loaderboot is self-contained and makes **zero** ROM
+> calls (it never executes below 0x40000), so `bs21_rom_call` does not change its
+> behaviour — it reaches its download-mode idle spin either way. `bs21_rom_call`
+> serves the later stages (flashboot/app), which call secure-libc heavily.
+
+## BS21 ROM table (source for `bs21_rom_call`)
 
 Source: `fbb_bs2x/src/drivers/chips/bs2x/rom/rom_config/acore/{acore_rom_n1200,
 romboot,remote_lib_boot}.sym` (the BS21 `acore.sym` equivalents) + `librom_callback.a`.
