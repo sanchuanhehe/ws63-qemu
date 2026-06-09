@@ -1,5 +1,5 @@
 diff --git a/hw/riscv/ws63.c b/hw/riscv/ws63.c
-index 30da70c..8a305ae 100644
+index 7ce56d1..fe740d6 100644
 --- a/hw/riscv/ws63.c
 +++ b/hw/riscv/ws63.c
 @@ -32,12 +32,12 @@
@@ -29,8 +29,8 @@ index 30da70c..8a305ae 100644
 +#include "system/address-spaces.h"
  #include "elf.h"
  #include "trace.h"     /* generated from hw/riscv/trace-events (ws63_* events) */
- 
-@@ -331,7 +331,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(WS63UartState, WS63_UART)
+ #include "hisi_riscv31.h" /* shared device-model type names + helpers (reused by bs21.c) */
+@@ -341,7 +341,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(WS63UartState, WS63_UART)
  struct WS63UartState {
      SysBusDevice parent_obj;
      MemoryRegion iomem;

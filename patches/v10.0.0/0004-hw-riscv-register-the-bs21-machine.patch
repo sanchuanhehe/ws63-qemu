@@ -15,17 +15,17 @@ RISCV32, selects UNIMP + WS63). Registers `-M bs21`.
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
 ---
- hw/riscv/Kconfig     | 6 ++++++
+ hw/riscv/Kconfig     | 7 +++++++
  hw/riscv/meson.build | 1 +
- 2 files changed, 7 insertions(+)
-
+ 2 files changed, 8 insertions(+)
 diff --git a/hw/riscv/Kconfig b/hw/riscv/Kconfig
 --- a/hw/riscv/Kconfig
 +++ b/hw/riscv/Kconfig
-@@ -126,3 +126,9 @@ config WS63
+@@ -125,3 +125,10 @@ config WS63
+     default y
      depends on RISCV32
      select UNIMP
-
++
 +config BS21
 +    bool
 +    default y
@@ -37,7 +37,8 @@ diff --git a/hw/riscv/meson.build b/hw/riscv/meson.build
 +++ b/hw/riscv/meson.build
 @@ -15,4 +15,5 @@ riscv_ss.add(when: 'CONFIG_RISCV_IOMMU', if_true: files(
  riscv_ss.add(when: 'CONFIG_MICROBLAZE_V', if_true: files('microblaze-v-generic.c'))
-
+ 
  riscv_ss.add(when: 'CONFIG_WS63', if_true: files('ws63.c'))
 +riscv_ss.add(when: 'CONFIG_BS21', if_true: files('bs21.c'))
  hw_arch += {'riscv': riscv_ss}
+
