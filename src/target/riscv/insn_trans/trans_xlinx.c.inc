@@ -332,6 +332,13 @@ static bool decode_xlinx32(DisasContext *ctx, uint32_t insn)
 {
     switch (insn & 0x7f) {
     case 0x0b:
+        /* opcode 0x0b, funct3: 0 = ldmia (load-multiple), 1 = stmia
+         * (store-multiple); 2/3 = pref/prefd, cache prefetch hints with no
+         * architectural effect -> NOP (the LiteOS app's .data copy loop issues
+         * `prefd` ahead of its ldmia/stmia block copy). */
+        if (((insn >> 12) & 0x7) >= 2) {
+            return true;
+        }
         return trans_xlinx_ldmstm(ctx, insn);
     case 0x1b:
         return trans_xlinx_shf(ctx, insn);

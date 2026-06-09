@@ -190,8 +190,26 @@ a0–a3, result in a0) and resume at `ra`.
    the `bs21-build-flash.sh` image). Running the full LiteOS BLE/SLE app from here is the
    broader connectivity work (full memory map / RAM init / all peripherals).
 
-The infrastructure (CPU + xlinx + memory map + UART/GPIO + SFC + flash1 + the
-disjoint-range ROM dispatch + bs21_rom_call + the mask-ROM signature + the TCXO fix +
-the GigaDevice flash ID) is in place; **flashboot now runs its full init, detects the
-flash, and loads + jumps to the application** — the BS2X vendor boot chain
-(loaderboot → flashboot → app) is end-to-end on `-M bs21` up to the app handoff.
+9. **App (LiteOS) startup runs — xlinx `prefd` decoded; app reaches its init-call
+   table (2026-06-09).** The app's RTOS startup ran only 21 insns then trapped
+   (mcause=2) on `prefd` (`0x0003300b`) in its `.data` copy loop — opcode 0x0b funct3=3,
+   a cache-prefetch hint the xlinx decoder didn't handle (it routed all 0x0b to
+   ldmia/stmia, which matched no register bits → illegal). Added funct3 dispatch:
+   0x0b f3 0/1 = ldmia/stmia (already handled), **f3 2/3 = pref/prefd → NOP** (a
+   prefetch is architecturally a no-op). With that, the app's `ldmia`/`stmia` block
+   copy runs and the app executes **934 insns** of real LiteOS startup (copies `.data`
+   flash→DTCM, sets up gp/sp, runs early init), then walks its **init-call table**
+   (11 fn-ptrs @ 0x90115a10..0x90115a3c). **Next blocker:** init `table[9]` (0x90118a3a,
+   a LiteOS task/thread registration — entry 0x90118cfe, stack 1536, prio 31, via the
+   creator at 0x90118a2a) returns error **0x2000209** → the app logs + halts at
+   `0x90128c62 (j .)`. That is LiteOS kernel bring-up (task creation / scheduler /
+   memory pools, then the BLE/SLE stack) — the broader connectivity work; each init
+   level needs its subsystem satisfied. (WS63 5/5 qtests + BS21 M1 unaffected by the
+   decoder change.)
+
+The infrastructure (CPU + xlinx [now incl. prefd] + memory map + UART/GPIO + SFC +
+flash1 + the disjoint-range ROM dispatch + bs21_rom_call + the mask-ROM signature +
+the TCXO fix + the GigaDevice flash ID) is in place; **flashboot loads + jumps to the
+app, and the LiteOS app executes its startup and reaches its init-call table** — the
+BS2X vendor boot chain (loaderboot → flashboot → app) runs end-to-end on `-M bs21`
+into the application's RTOS init.
