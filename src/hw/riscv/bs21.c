@@ -69,6 +69,10 @@
 #define BS21_MMIO_MCTL_SIZE 0x01000000
 #define BS21_MMIO_GLB_BASE  0x57000000
 #define BS21_MMIO_GLB_SIZE  0x01000000
+/* USB 2.0 OTG controller (Synopsys DWC OTG) @0x58000000 — bs2x-pac models it but
+ * no firmware drives it yet; absorb the window so register access doesn't fault. */
+#define BS21_MMIO_USB_BASE  0x58000000
+#define BS21_MMIO_USB_SIZE  0x00040000
 /* riscv31 core private peripheral bus (FlashPatch + SCS), same as WS63. */
 #define BS21_PPB_BASE       0xE0000000
 #define BS21_PPB_SIZE       0x00010000
@@ -144,6 +148,7 @@ static void bs21_machine_init(MachineState *machine)
     /* Catch-all absorbers for un-modeled peripheral MMIO (real devices on top). */
     create_unimplemented_device("bs21.mmio.mctl", BS21_MMIO_MCTL_BASE, BS21_MMIO_MCTL_SIZE);
     create_unimplemented_device("bs21.mmio.glb", BS21_MMIO_GLB_BASE, BS21_MMIO_GLB_SIZE);
+    create_unimplemented_device("bs21.mmio.usb", BS21_MMIO_USB_BASE, BS21_MMIO_USB_SIZE);
 
     /* LOCI interrupt controller (shared model). */
     DeviceState *intc = qdev_new(TYPE_WS63_INTC);
