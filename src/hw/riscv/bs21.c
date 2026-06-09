@@ -53,9 +53,11 @@
 #define BS21_ROM_BASE       0x00008000
 #define BS21_ROM_SIZE       0x00078000   /* ROM symbols extend to ~0x80000 */
 #define BS21_ITCM_BASE      0x00080000
-#define BS21_ITCM_SIZE      0x00070000   /* 512K I-TCM window (DTCM carved off top) */
-#define BS21_DTCM_BASE      0x000F0000
-#define BS21_DTCM_SIZE      0x00010000
+#define BS21_ITCM_SIZE      0x00080000   /* I-TCM MPU window 0x80000..0x100000 */
+/* DTCM lives at 0x20000000 (APP_DTCM_ORIGIN), NOT carved from the ITCM window —
+ * the loaderboot reset code relocates the boot-param block to ~0x20002d50. */
+#define BS21_DTCM_BASE      0x20000000
+#define BS21_DTCM_SIZE      0x00010000   /* 64K (APP_DTCM_LENGTH) */
 #define BS21_FLASH_BASE     0x10000000   /* XIP NOR flash (QSPI) */
 #define BS21_FLASH_SIZE     0x00100000   /* 1M */
 #define BS21_SRAM_BASE      0x00100000   /* L2RAM (160K on BS21E/BS22) */
