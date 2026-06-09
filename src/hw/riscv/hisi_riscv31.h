@@ -32,6 +32,10 @@
 #define TYPE_WS63_TIMER  "ws63-timer"
 #define TYPE_WS63_GPIO   "ws63-gpio"
 #define TYPE_WS63_TCXO   "ws63-tcxo"
+/* SFC (serial-flash controller) v150 — models the SPI command interface enough
+ * for flash identification/status (RDID -> JEDEC ID, RDSR -> 0). BS21's SFC is
+ * the same v150 IP as WS63's, at a different base (0x90000000 vs 0x48000000). */
+#define TYPE_WS63_SFC    "ws63-sfc"
 
 /* Map a fresh RAM-backed region @size bytes into @sys at @base. */
 void ws63_make_ram(MemoryRegion *sys, MemoryRegion *mr, const char *name,

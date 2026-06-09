@@ -87,6 +87,7 @@
 #define BS21_TIMER_BASE     0x52002000
 #define BS21_GPIO0_BASE     0x57010000
 #define BS21_TCXO_BASE      0x57000200
+#define BS21_SFC_BASE       0x90000000   /* serial-flash controller regs (v150) */
 
 /* IRQ numbers (chip_core_irq.h). 26-31 use standard mie bits; >=32 are LOCI.
  * (BS21's 26-29 are BT/ADC, unlike WS63 where they are TIMER.) */
@@ -160,6 +161,13 @@ static void bs21_machine_init(MachineState *machine)
     DeviceState *tcxo = qdev_new(TYPE_WS63_TCXO);
     sysbus_realize_and_unref(SYS_BUS_DEVICE(tcxo), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(tcxo), 0, BS21_TCXO_BASE);
+
+    /* SFC serial-flash controller (shared v150 model) — models the SPI command
+     * interface enough for flash identification (RDID -> JEDEC ID), so the vendor
+     * flashboot's early flash init succeeds. */
+    DeviceState *sfc = qdev_new(TYPE_WS63_SFC);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(sfc), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(sfc), 0, BS21_SFC_BASE);
 
     /* TIMER0..3 (shared model; IRQ 53..). The model exposes 3 channels. */
     DeviceState *timer = qdev_new(TYPE_WS63_TIMER);

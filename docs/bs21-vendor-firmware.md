@@ -93,12 +93,16 @@ a0–a3, result in a0) and resume at `ra`.
 
 1. ~~BS21 ROM-call table~~ — DONE (`bs21_rom_call`, patches 0005; see above).
 2. ~~flashboot image format~~ — DONE (cracked; `bs21-vendor-boot.sh` runs it).
-3. **SFC model** (`0x90000000`) — the NEXT blocker: flashboot reads flash via the
-   SFC early (version-check / app-load) and halts when it gets garbage. Modelling
-   the SFC (valid flash ID/status + the XIP flash content) lets flashboot proceed
-   to load the application and print its banner. (WS63 has a `ws63-sfc` model at
-   0x48000000; BS21's SFC is v150 @0x90000000 — check IP match, then map it.)
-4. **mask-ROM / SFC-resident boot helpers** + the full boot-stage hand-off.
+3. ~~SFC reg model~~ — DONE. The `ws63-sfc` v150 model (RDID→JEDEC ID) is mapped at
+   `0x90000000` in bs21.c; flashboot's flash-ID init now succeeds (it runs 9 instrs
+   further). M1 + WS63 unaffected.
+4. **Flash CONTENT** — the next gate: after flash-ID, flashboot reads the partition
+   table from flash (via the SFC command interface, into DTCM `0x20000c34`) and
+   checks its first word against the magic **`0x4b87a52d`** (loaded by an xlinx
+   `l.li`). Empty flash → 0 ≠ magic → it halts. To proceed it needs the SFC's READ
+   command backed by a flash image containing a valid partition table (magic
+   `0x4b87a52d`) + the application — i.e. loading the real firmware. That (+ the app
+   image) is the remaining "boot the vendor app" chain.
 
 The infrastructure (CPU + xlinx + memory map + UART/GPIO + the disjoint-range ROM
 dispatch + bs21_rom_call) is in place; both loaderboot and flashboot *run* — the
