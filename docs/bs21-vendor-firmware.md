@@ -265,11 +265,41 @@ a0–a3, result in a0) and resume at `ra`.
     SKIPped, a false PASS. WS63 5/5 qtests + BS21 M1 — uart_hello banner + 13 GPIO toggles,
     0 illegal traps — both green.)
 
+13. **Stuck loop traced to eFUSE (v151) + ULP_AON PMU bring-up (2026-06-10).** Dug
+    `0x570007a0` to its root. The app is **truly stuck** (identical 3723 app PCs / max PC
+    `0x901662bc` / 9 UART lines at both 8s and 25s), in a **20-PC ITCM loop** with **no
+    app PCs** — an init/handler-table iteration (table of `{fn_ptr@0x9019Fxxx, id, 0,
+    fn_ptr@0x90166xxx}` at DTCM `0x20002ae4`) whose one handler runs **eFUSE + ULP_AON
+    PMU register operations** that never satisfy their exit condition. Decoded from live
+    DTCM dumps: `0x425b6` = `hal_efuse_switch_en_set(0xa5a5)` (writes the eFUSE unlock
+    magic `0xa5a5` to `g_efuse_switch_en_addr = 0x5702C258`); the per-byte loop `0x4269e`
+    iterates eFUSE bytes via `g_efuse_base = 0x57028030`, read-data `0x57028800+`,
+    boot-done status `g_efuse_boot_done_addr = 0x5702802C` (bit2 = `efuse_boot2_done`,
+    `EFUSE_BOOT_DONE_MASK 0x4`). The eFUSE IP is **v151** (full source in
+    `fbb_ws63/.../hal/efuse/v151/`; `HAL_EFUSE_SWITCH_EN 0xa5a5`). Steady-state MMIO is a
+    *varied* sequence (not one poll): eFUSE `0x57028030`/`0x5702887c` + ULP_AON
+    `0x5702c204`/`0x5702c520`/`0x5702c930`/`0x5702c938`/`0x5702c974` writes(`0xa5a5`/
+    `0x5a5a`/configs)+reads. **Root cause:** neither the eFUSE controller (`0x57028000`)
+    nor the ULP_AON PMU status block (`0x5702c000`) is modelled — the absorber returns 0,
+    so the calibration/PMU "ready"/trim-data the handler waits for never appears. **This
+    is a distinct, larger phase:** model the **eFUSE v151 controller** (boot-done bit2
+    set; switch-en accepts `0xa5a5`; read-data returns blank/efuse image) **+ the ULP_AON
+    PMU status registers**. The exact ready-bit/expected-value needs the BS2X ULP_AON +
+    eFUSE register maps, which are **not in the open SDK source** (precompiled hal libs /
+    generated headers) — so it isn't a quick single-register model like the 32K-clock one;
+    it wants the register spec first (per "C SDK as sole ground truth", not guessed bits).
+    Reusable probes used: live DTCM dumps via QMP `human-monitor-command "xp/Nxw addr"`;
+    `-d in_asm` app-PC-coverage diff across run lengths to prove stuck-vs-slow; `-d unimp`
+    tail to read the steady-state MMIO footprint.
+
 The infrastructure (CPU + xlinx [now incl. prefd + the muliadd imm fix + the ldmia/stmia
 bank selector] + memory map + UART/GPIO + SFC + flash1 + the disjoint-range ROM dispatch
 + bs21_rom_call + the mask-ROM signature + the TCXO fix + the GigaDevice flash ID + the
 32K-clock-detect status) is in place; **flashboot loads + jumps to the app, and the LiteOS
 app runs its full kernel init (sections, memory pool, task create/resume, init-call levels)
 crash-free, past the 32K-clock calibration** — the BS2X vendor boot chain (loaderboot →
-flashboot → app) runs end-to-end on `-M bs21` into the application's clock/power bring-up
-(now blocked on a GLB_CTL_A clock-ready status poll at `0x570007a0`).
+flashboot → app) runs end-to-end on `-M bs21` into the application's clock/power bring-up,
+**now blocked on an eFUSE (v151) + ULP_AON PMU calibration handler** (`0x57028000` /
+`0x5702c000` unmodelled). The next phase is a real eFUSE-controller + ULP_AON-PMU-status
+device model — see §13 (needs the BS2X eFUSE/ULP_AON register maps, which aren't in the
+open SDK source).
