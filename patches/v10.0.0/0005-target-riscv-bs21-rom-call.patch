@@ -4,19 +4,26 @@ Date: Sun, 9 Jun 2026 15:00:00 +0800
 Subject: [PATCH] target/riscv: BS21/BS2X mask-ROM call emulation (bs21_rom_call)
 
 Mirror ws63_rom_call for the BS21/BS2X ROM ABI. Adds the BS21 ROM range
-(0x10000..0x40000, from the fbb_bs2x acore_rom_n1200.sym; DISJOINT from the WS63
-range and from where the BS2X boot stages load+run at 0x40000+, so the illegal-
-instruction hook dispatches WS63 vs BS21 purely by pc) and bs21_rom_call(), which
-emulates the secure-libc set the BS2X boot stages call (memset_s 0x3d80c,
-memcpy_s 0x3e07e, memmove_s 0x3e95c, sprintf_s 0x3ef18, snprintf_s 0x3ef60,
-vsnprintf_s 0x3ef92) — the printf family reuses the chip-neutral ws63_vformat()
-helper. Validated: a call to 0x3d80c on -M bs21 is intercepted, memset_s runs,
-execution resumes at ra. WS63 path unchanged (5/5 qtests + M1 still pass).
+(0x10000..0x40000; DISJOINT from the WS63 range and from where the BS2X boot
+stages load+run at 0x40000+, so the illegal-instruction hook dispatches WS63 vs
+BS21 purely by pc) and bs21_rom_call(), which emulates the secure-libc set the
+BS2X boot stages + app call (memset_s 0x3d1dc, memcpy_s 0x3da4e, memmove_s
+0x3e32c, sprintf_s 0x3e8e8, vsprintf_s 0x3e902, snprintf_s 0x3e930, vsnprintf_s
+0x3e962) — the printf family reuses the chip-neutral ws63_vformat() helper.
+
+These addresses are from the bs21e mask-ROM symbol file the bs21e target links
+against (fbb_bs2x src/drivers/chips/bs2x/rom/rom_info/acore/acore.sym), NOT
+bs20/bs22's acore_rom_n1200.sym (whose securec symbols sit at different
+addresses). Using the wrong file's addresses left the app's vsnprintf_s
+(0x3e962) unmapped → the success stub returned 0 with an empty buffer, so every
+osal_printk produced no output: the LiteOS console + all peripheral-sample logs
+were silent despite the print path running. With the bs21e addresses the tcxo
+sample prints + self-validates. WS63 path unchanged (5/5 qtests + M1 still pass).
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
 ---
- target/riscv/cpu_helper.c | 100 +++++++++
- 1 file changed, 100 insertions(+)
+ target/riscv/cpu_helper.c | 114 ++++++++++
+ 1 file changed, 114 insertions(+)
 
 diff --git a/target/riscv/cpu_helper.c b/target/riscv/cpu_helper.c
 --- a/target/riscv/cpu_helper.c
@@ -37,7 +44,7 @@ diff --git a/target/riscv/cpu_helper.c b/target/riscv/cpu_helper.c
  /* Scratch RAM (in the PPB region, past the SCS) for ROM vtables we synthesize. */
  #define WS63_ROM_SCRATCH 0xE000F000u
  enum { WS63_A0 = 10, WS63_A1, WS63_A2, WS63_A3, WS63_A4, WS63_A5, WS63_A6, WS63_A7 };
-@@ -2605,6 +2614,91 @@
+@@ -2605,6 +2614,107 @@
      env->pc = env->gpr[1]; /* return to caller (ra) */
  }
  
@@ -56,8 +63,14 @@ diff --git a/target/riscv/cpu_helper.c b/target/riscv/cpu_helper.c
 +    target_ulong *g = env->gpr;
 +    long ret = 0;
 +
++    /*
++     * ROM securec addresses are from the bs21e mask-ROM symbol file
++     * (fbb_bs2x src/drivers/chips/bs2x/rom/rom_info/acore/acore.sym, the
++     * `rom_sym_path` for target bs21e). NB these differ from bs20/bs22's
++     * acore_rom_n1200.sym — bs21e links against acore.sym.
++     */
 +    switch (pc) {
-+    case 0x3d80c: { /* memset_s(dst, dmax, c, n) */
++    case 0x3d1dc: { /* memset_s(dst, dmax, c, n) */
 +        uint32_t dst = g[WS63_A0], dmax = g[WS63_A1], n = g[WS63_A3];
 +        uint8_t c = (uint8_t)g[WS63_A2];
 +        if (n > dmax) { ret = -1; break; }
@@ -66,7 +79,7 @@ diff --git a/target/riscv/cpu_helper.c b/target/riscv/cpu_helper.c
 +        }
 +        break;
 +    }
-+    case 0x3e07e: { /* memcpy_s(dst, dmax, src, n) */
++    case 0x3da4e: { /* memcpy_s(dst, dmax, src, n) */
 +        uint32_t dst = g[WS63_A0], dmax = g[WS63_A1], src = g[WS63_A2], n = g[WS63_A3];
 +        if (n > dmax) { ret = -1; break; }
 +        for (uint32_t k = 0; k < n; k++) {
@@ -76,7 +89,7 @@ diff --git a/target/riscv/cpu_helper.c b/target/riscv/cpu_helper.c
 +        }
 +        break;
 +    }
-+    case 0x3e95c: { /* memmove_s(dst, dmax, src, n) */
++    case 0x3e32c: { /* memmove_s(dst, dmax, src, n) */
 +        uint32_t dst = g[WS63_A0], dmax = g[WS63_A1], src = g[WS63_A2], n = g[WS63_A3];
 +        if (n > dmax) { ret = -1; break; }
 +        uint8_t *t = g_malloc(n ? n : 1);
@@ -85,7 +98,7 @@ diff --git a/target/riscv/cpu_helper.c b/target/riscv/cpu_helper.c
 +        g_free(t);
 +        break;
 +    }
-+    case 0x3ef18: { /* sprintf_s(dst, dmax, fmt, ...) */
++    case 0x3e8e8: { /* sprintf_s(dst, dmax, fmt, ...) */
 +        uint32_t dst = g[WS63_A0], dmax = g[WS63_A1];
 +        char buf[512];
 +        WS63Args a = { env, WS63_A3, 0, false };
@@ -95,7 +108,17 @@ diff --git a/target/riscv/cpu_helper.c b/target/riscv/cpu_helper.c
 +        ret = len;
 +        break;
 +    }
-+    case 0x3ef60: { /* snprintf_s(dst, dmax, count, fmt, ...) */
++    case 0x3e902: { /* vsprintf_s(dst, dmax, fmt, va_list) */
++        uint32_t dst = g[WS63_A0], dmax = g[WS63_A1];
++        char buf[512];
++        WS63Args a = { env, 0, g[WS63_A3], true };
++        int len = ws63_vformat(buf, sizeof(buf), g[WS63_A2], &a);
++        if (dmax && (uint32_t)len >= dmax) { len = dmax - 1; }
++        cpu_physical_memory_write(dst, buf, len + 1);
++        ret = len;
++        break;
++    }
++    case 0x3e930: { /* snprintf_s(dst, dmax, count, fmt, ...) */
 +        uint32_t dst = g[WS63_A0], dmax = g[WS63_A1], count = g[WS63_A2];
 +        char buf[512];
 +        WS63Args a = { env, WS63_A4, 0, false };
@@ -106,7 +129,7 @@ diff --git a/target/riscv/cpu_helper.c b/target/riscv/cpu_helper.c
 +        ret = len;
 +        break;
 +    }
-+    case 0x3ef92: { /* vsnprintf_s(dst, dmax, count, fmt, va_list) */
++    case 0x3e962: { /* vsnprintf_s(dst, dmax, count, fmt, va_list) */
 +        uint32_t dst = g[WS63_A0], dmax = g[WS63_A1], count = g[WS63_A2];
 +        char buf[512];
 +        WS63Args a = { env, 0, g[WS63_A4], true };
@@ -129,7 +152,7 @@ diff --git a/target/riscv/cpu_helper.c b/target/riscv/cpu_helper.c
  static void riscv_do_nmi(CPURISCVState *env, target_ulong cause, bool virt)
  {
      env->mnstatus = set_field(env->mnstatus, MNSTATUS_NMIE, false);
-@@ -2657,6 +2751,11 @@
+@@ -2657,6 +2767,11 @@
          ws63_rom_call(env);
          return;
      }
