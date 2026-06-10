@@ -318,12 +318,30 @@ a0–a3, result in a0) and resume at `ra`.
     magic 0xdeadbeaf @0x2000ffe8) — core 2 = APPS_CORE; it clears bit0 of BOOT_PORTING_RESET_
     REG `0x57004600` and spins `j .` waiting for the chip reset. This is the **original
     "core:2" halt, now reached cleanly** (not via a crash) after a full init pass — a stage-1
-    → stage-2 reboot. **Next:** model the chip-reset trigger (0x57004600 bit0 clear →
-    `qemu_system_reset`) so the app reboots and runs its second stage; classify whether
-    cause 0x2003 is the normal calibration-reboot or an error first. WS63 5/5 qtests + BS21
-    M1 (uart_hello banner + 13 GPIO toggles, 0 illegal traps) both green. **Key probe:** the
-    app overwrites ITCM — always disassemble *live* memory (QMP `pmemsave`), not the loaded
-    image, once past the app handoff.
+    → stage-2 reboot. WS63 5/5 qtests + BS21 M1 (uart_hello banner + 13 GPIO toggles, 0
+    illegal traps) both green. **Key probe:** the app overwrites ITCM — always disassemble
+    *live* memory (QMP `pmemsave`), not the loaded image, once past the app handoff.
+
+15. **The `cause=0x2003` reboot is a PANIC from an event-wait timeout = the connectivity
+    boundary (2026-06-10).** Classified the reboot (per §14's open question): it is **not** a
+    clean stage-1→2 reboot, it's a **software panic** (no CPU trap — mtvec `0x44330` is never
+    entered; mcause/mepc = 0). The panic handler `0x9012f8ec` prints `"APP|[panic]id:%d,
+    code:0x%x,call:0x%x"` then `0x9012f9a0` dumps context and calls `reboot(core=2,
+    cause=0x2003)`. The trigger is a **queue-consume + timed-wait loop** at `0x9013062e`: it
+    polls a software message queue (`0x90130368` reads list entries at `0x4bed0`/`0x4bec4`),
+    checks a pending state (`0x90122cd4` → 2 = pending), runs a timed wait (`0x90122d64`),
+    and on timeout calls `panic(id=9)` (cause 0x2003 is *not* a watchdog — those are
+    0x2002/0x4002/0x8002 in reboot_porting.h). **Root cause:** the queue/event the task waits
+    on is never produced — the producer needs the **event/message-driven connectivity stack**
+    (interrupts/IPC from the BLE/SLE/radio + protocol/BT core), which is the deferred
+    connectivity work, not modelled. So **modelling the chip-reset trigger would NOT advance
+    the boot — it would reboot-loop into the same panic** (the missing event is structural,
+    not first-boot state). This is the expected end of the *single-core stage-1* bring-up:
+    the app completes all of kernel init + clock/PMU/eFUSE/calibration, then blocks on the
+    connectivity/event layer. Crossing it is the deferred BLE/SLE blob + multi-core/IPC +
+    full-peripheral-event work (project north star), a multi-week effort — not a single
+    register/decoder fix. WS63 5/5 qtests + BS21 M1 green (this entry is analysis only, no
+    code change).
 
 The infrastructure (CPU + xlinx [now incl. prefd + the muliadd imm fix + the ldmia/stmia
 bank selector] + memory map + UART/GPIO + SFC + flash1 + the disjoint-range ROM dispatch
@@ -331,7 +349,10 @@ bank selector] + memory map + UART/GPIO + SFC + flash1 + the disjoint-range ROM 
 32K-clock-detect status + the eFUSE v151 controller + the TCXO v150 16-bit count layout)
 is in place; **flashboot loads + jumps to the app, and the LiteOS app runs its full kernel
 init AND all clock/PMU/eFUSE/calibration bring-up crash-free**, then deliberately reboots
-the apps core (`reboot(core=2, cause=0x2003)`) — the BS2X vendor boot chain (loaderboot →
-flashboot → app) runs end-to-end on `-M bs21` through the application's stage-1 init to its
-stage-1→2 reboot request. The next step is to model the chip-reset trigger (`0x57004600`
-bit0) so the app reboots and runs its second stage — see §14.
+the apps core — the BS2X vendor boot chain (loaderboot → flashboot → app) runs end-to-end on
+`-M bs21` through the application's **entire single-core stage-1 bring-up** (kernel init +
+clock/PMU/eFUSE/calibration), then blocks on the **event/connectivity layer**: a task waits
+on a message queue that is never produced, times out, and panics (`panic(id=9)` →
+`reboot(core=2, cause=0x2003)`; see §15). That boundary is the deferred BLE/SLE + multi-core
+IPC + full-peripheral-event work (the project north star), not a single fix — modelling the
+chip reset alone would only reboot-loop into the same panic.
