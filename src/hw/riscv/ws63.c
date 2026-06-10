@@ -979,6 +979,12 @@ struct WS63TcxoState {
                          * count1[31:16] @+8, count2[47:32] @+0C, count3[63:48]
                          * @+10 (hal_tcxo_v150_regs_def.h). Set via
                          * ws63_tcxo_set_chunked16() before realize. */
+    uint64_t latched;   /* chunked16: count snapshot taken on the refresh write
+                         * (status bit0). The v150 read is refresh -> poll valid ->
+                         * read count0..3, and the firmware reads the chunks
+                         * high-to-low, so all four must come from one snapshot;
+                         * advancing per-chunk would tear the value and stall every
+                         * tcxo delay (count >= target never holds). */
     uint32_t shadow[WS63_TCXO_SIZE / 4];
 };
 
@@ -1016,16 +1022,16 @@ static uint64_t ws63_tcxo_read(void *opaque, hwaddr off, unsigned size)
         return 0x10;
     }
     if (s->chunked16) {
-        /* BS21 TCXO v150: count split into four 16-bit chunks. Advancing the
-         * tick on the first chunk (+0x04) latches the whole 64-bit count. */
+        /* BS21 TCXO v150: count split into four 16-bit chunks, all read from the
+         * snapshot latched by the most recent refresh write (ws63_tcxo_write). */
         if (off == s->count_off + 4) {       /* count0: count[15:0]  */
-            return (uint32_t)(ws63_tcxo_tick(s) & 0xffff);
+            return (uint32_t)(s->latched & 0xffff);
         } else if (off == s->count_off + 8) { /* count1: count[31:16] */
-            return (uint32_t)((s->count >> 16) & 0xffff);
+            return (uint32_t)((s->latched >> 16) & 0xffff);
         } else if (off == s->count_off + 0xc) { /* count2: count[47:32] */
-            return (uint32_t)((s->count >> 32) & 0xffff);
+            return (uint32_t)((s->latched >> 32) & 0xffff);
         } else if (off == s->count_off + 0x10) { /* count3: count[63:48] */
-            return (uint32_t)((s->count >> 48) & 0xffff);
+            return (uint32_t)((s->latched >> 48) & 0xffff);
         }
     } else if (off == s->count_off + 4) {   /* +0x04: count[31:0] (advance here) */
         return (uint32_t)ws63_tcxo_tick(s);
@@ -1038,6 +1044,11 @@ static uint64_t ws63_tcxo_read(void *opaque, hwaddr off, unsigned size)
 static void ws63_tcxo_write(void *opaque, hwaddr off, uint64_t val, unsigned size)
 {
     WS63TcxoState *s = opaque;
+    /* chunked16 (BS21 v150): a write to the status register with the refresh bit
+     * (bit0) set takes a fresh count snapshot for the count0..3 reads. */
+    if (s->chunked16 && off == s->count_off && (val & 0x1)) {
+        s->latched = ws63_tcxo_tick(s);
+    }
     s->shadow[(off / 4) % (WS63_TCXO_SIZE / 4)] = (uint32_t)val;
 }
 
