@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ws63-rs <noreply@anthropic.com>
+Date: Wed, 11 Jun 2026 10:00:00 +0800
+Subject: [PATCH] hw/riscv: register the HiSilicon BS20 machine (minimal/M1)
+
+Build-system integration for hw/riscv/bs20.c (the minimal BS20 / BS2X machine).
+Like bs21.c/bs22.c, bs20.c reuses the shared HiSilicon riscv31 device models from
+ws63.c via hisi_riscv31.h, so CONFIG_BS20 selects CONFIG_WS63.
+
+BS20 shares the BS2X peripheral bases (platform_core.h) + IRQ numbers
+(chip_core_irq.h) with BS21E/BS22, but has a smaller 128K L2RAM (vs 160K) — so
+unlike bs22 (byte-identical to bs21), BS20 is genuinely distinct: its -m bank is
+128K, and the bs20 firmware (examples/bs20) ships a matching 128K memory.x (stack
+top 0x120000) rather than the 160K layout (stack top 0x128000), which would
+overflow the bank.
+
+Adds the CONFIG_BS20 meson source entry and the Kconfig symbol (default y on
+RISCV32, selects UNIMP + WS63). Registers `-M bs20`.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+---
+ hw/riscv/Kconfig     | 7 +++++++
+ hw/riscv/meson.build | 1 +
+ 2 files changed, 8 insertions(+)
+diff --git a/hw/riscv/Kconfig b/hw/riscv/Kconfig
+--- a/hw/riscv/Kconfig
++++ b/hw/riscv/Kconfig
+@@ -139,3 +139,10 @@
+     depends on RISCV32
+     select UNIMP
+     select WS63
++
++config BS20
++    bool
++    default y
++    depends on RISCV32
++    select UNIMP
++    select WS63
+diff --git a/hw/riscv/meson.build b/hw/riscv/meson.build
+--- a/hw/riscv/meson.build
++++ b/hw/riscv/meson.build
+@@ -17,4 +17,5 @@
+ riscv_ss.add(when: 'CONFIG_WS63', if_true: files('ws63.c'))
+ riscv_ss.add(when: 'CONFIG_BS21', if_true: files('bs21.c'))
+ riscv_ss.add(when: 'CONFIG_BS22', if_true: files('bs22.c'))
++riscv_ss.add(when: 'CONFIG_BS20', if_true: files('bs20.c'))
+ hw_arch += {'riscv': riscv_ss}
