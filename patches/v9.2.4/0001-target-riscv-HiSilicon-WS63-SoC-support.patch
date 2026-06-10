@@ -14,7 +14,7 @@ diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
 index 261db87..bc45ac5 100644
 --- a/target/riscv/cpu.c
 +++ b/target/riscv/cpu.c
-@@ -708,6 +708,36 @@ static void rv32_imafcu_nommu_cpu_init(Object *obj)
+@@ -708,6 +708,42 @@ static void rv32_imafcu_nommu_cpu_init(Object *obj)
      cpu->cfg.pmp = true;
  }
  
@@ -45,6 +45,12 @@ index 261db87..bc45ac5 100644
 +    cpu->cfg.ext_zifencei = true;
 +    cpu->cfg.ext_zicntr = true;
 +    cpu->cfg.ext_zcf = true;
++    /* riscv31 implements the bit-manip extensions; LiteOS's scheduler
++     * (OsGetTopTask) uses clz (Zbb) to pick the top ready priority. */
++    cpu->cfg.ext_zba = true;
++    cpu->cfg.ext_zbb = true;
++    cpu->cfg.ext_zbc = true;
++    cpu->cfg.ext_zbs = true;
 +    cpu->cfg.pmp = true;
 +}
 +

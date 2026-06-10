@@ -52,7 +52,7 @@ index 8ac935a..8c74d56 100644
      if (env->misa_mxl > MXL_RV32) {
          /*
           * The reset status of SXL/UXL is undefined, but mstatus is WARL
-@@ -3074,6 +3082,27 @@ static const TypeInfo riscv_cpu_type_infos[] = {
+@@ -3074,6 +3082,31 @@ static const TypeInfo riscv_cpu_type_infos[] = {
          .misa_mxl_max = MXL_RV32,
      ),
  
@@ -74,6 +74,10 @@ index 8ac935a..8c74d56 100644
 +        .cfg.ext_zifencei = true,
 +        .cfg.ext_zicntr = true,
 +        .cfg.ext_zcf = true,
++        .cfg.ext_zba = true,
++        .cfg.ext_zbb = true,
++        .cfg.ext_zbc = true,
++        .cfg.ext_zbs = true,
 +        .cfg.pmp = true,
 +    ),
 +
