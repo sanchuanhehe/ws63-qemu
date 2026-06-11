@@ -1929,6 +1929,57 @@ void ws63_create_trng(hwaddr base)
     memory_region_add_subregion(get_system_memory(), base, mr);
 }
 
+/* ============================================================================
+ * BS2X WDT (watchdog v151) @0x52003000 — a shadow model where WDT_CNT (0x14)
+ * reads back the loaded WDT_LOAD (0x04), so the chip-bs21 Rust `wdt` driver's
+ * counter_value() returns the configured timeout (and the watchdog never fires —
+ * the test only checks the configured value is read back). Other regs shadow.
+ * ========================================================================== */
+#define WDT_LOAD_OFF     0x04
+#define WDT_CNT_OFF      0x14
+#define WDT_CCVR_EN_OFF  0x28   /* bit0 = request, bit1 = counter-value ready */
+
+typedef struct { uint32_t shadow[0x40 / 4]; } WS63WdtState;
+
+static uint64_t ws63_wdt_read(void *opaque, hwaddr off, unsigned size)
+{
+    WS63WdtState *s = opaque;
+    if (off == WDT_CNT_OFF) {
+        return s->shadow[WDT_LOAD_OFF / 4];   /* counter starts at the load value */
+    }
+    if (off == WDT_CCVR_EN_OFF) {
+        return 0x2;                           /* counter-value always ready (bit1) */
+    }
+    if (off < 0x40) {
+        return s->shadow[off / 4];
+    }
+    return 0;
+}
+
+static void ws63_wdt_write(void *opaque, hwaddr off, uint64_t val, unsigned size)
+{
+    WS63WdtState *s = opaque;
+    if (off < 0x40) {
+        s->shadow[off / 4] = (uint32_t)val;
+    }
+}
+
+static const MemoryRegionOps ws63_wdt_ops = {
+    .read = ws63_wdt_read,
+    .write = ws63_wdt_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .impl = { .min_access_size = 1, .max_access_size = 4 },
+    .valid = { .min_access_size = 1, .max_access_size = 4 },
+};
+
+void ws63_create_wdt(hwaddr base)
+{
+    WS63WdtState *s = g_new0(WS63WdtState, 1);
+    MemoryRegion *mr = g_new0(MemoryRegion, 1);
+    memory_region_init_io(mr, NULL, &ws63_wdt_ops, s, "bs2x.wdt", 0x1000);
+    memory_region_add_subregion(get_system_memory(), base, mr);
+}
+
 /* peripheral instance table (base, kind, window size, name, irq) — from WS63.svd.
  * irq != 0 is connected to the intc (the device raises it via qemu_set_irq). */
 static const struct {

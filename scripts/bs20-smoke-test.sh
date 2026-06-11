@@ -172,5 +172,18 @@ else
     echo "==> bs20 clock_rng: SKIP"
 fi
 
+
+# ---- pwm_wdt: BS2X PWM (v151) + WDT (v151) drivers ----
+PW_ELF="$TARGET_DIR/bs20_pwm_wdt"
+if [ -f "$PW_ELF" ]; then
+    echo "==> bs20 pwm_wdt on -M bs20: expecting WDT counter readback + PWM start (chip-bs21)"
+    timeout 5 "$QEMU_BIN" -M bs20 -nographic -serial mon:stdio -kernel "$PW_ELF" >"$TMP/pw.out" 2>/dev/null
+    if grep -q "PWM+WDT OK" "$TMP/pw.out"; then
+        echo "    PASS: $(grep -m1 'wdt counter' "$TMP/pw.out")"
+    else
+        echo "    FAIL: PWM+WDT not OK. Got:"; grep -aE 'wdt|pwm|PWM' "$TMP/pw.out" | sed 's/^/      /'; fail=1
+    fi
+else echo "==> bs20 pwm_wdt: SKIP"; fi
+
 [ "$fail" -eq 0 ] && echo "BS20 SMOKE TEST: PASS" || echo "BS20 SMOKE TEST: FAIL"
 exit "$fail"

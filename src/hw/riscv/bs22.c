@@ -102,6 +102,7 @@
 #define BS22_QDEC_BASE      0x52000200   /* QDEC (quadrature decoder v150) */
 #define BS22_RTC_BASE       0x57024100   /* RTC0 (rtc_unified v150) */
 #define BS22_TRNG_BASE      0x52009000   /* TRNG (v1) */
+#define BS22_WDT_BASE       0x52003000   /* WDT (watchdog v151) */
 
 /* IRQ numbers (chip_core_irq.h, shared across BS2X). 26-31 use standard mie bits;
  * >=32 are LOCI. */
@@ -224,6 +225,9 @@ static void bs22_machine_init(MachineState *machine)
     /* RTC0 + TRNG — exercise the chip-bs21 rtc/trng drivers. */
     ws63_create_rtc(BS22_RTC_BASE);
     ws63_create_trng(BS22_TRNG_BASE);
+
+    /* WDT (watchdog v151) — exercises the chip-bs21 wdt driver. */
+    ws63_create_wdt(BS22_WDT_BASE);
 
     /* UART0/1/2 (custom device on top of the absorber). */
     const hwaddr uart_base[3] = { BS22_UART0_BASE, BS22_UART1_BASE, BS22_UART2_BASE };

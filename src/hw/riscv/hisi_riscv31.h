@@ -100,4 +100,9 @@ void ws63_create_rtc(hwaddr base);
 /* Map a BS2X TRNG (v1) model at @base: FIFO always ready, data varies per read. */
 void ws63_create_trng(hwaddr base);
 
+/* Map a BS2X WDT (watchdog v151) shadow model at @base: WDT_CNT reads back the
+ * loaded WDT_LOAD so the chip-bs21 wdt driver's counter_value() returns the
+ * configured timeout. */
+void ws63_create_wdt(hwaddr base);
+
 #endif /* HW_RISCV_HISI_RISCV31_H */
