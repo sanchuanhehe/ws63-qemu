@@ -63,29 +63,56 @@ What this leaves:
 
 - **Theoretically feasible for BLE:** replace *one* blob with a synthetic that
   satisfies the other's ABI — provide your own `api_h2c_write` + event callback,
-  link the **host** blob against a synthetic controller, and feed it well-formed
-  standard BLE HCI events. You do not need the host's source, only its linker
-  symbols and valid HCI. If the boundary is standard HCI, an existing software LL
-  controller (NimBLE/Zephyr) could even be bridged in.
+  link the **host** blob against a synthetic controller. You do not need the
+  host's source, only its linker symbols and a valid message stream.
 - **Substantial, not cheap:** you must (1) reverse the exact packet ABI at
-  `api_h2c_write` (tractable — trace it the same way we traced B_CTL), and (2)
-  satisfy the host blob's *other* dependencies (LiteOS, timers, the controller's
-  remaining exported symbols) — a large surface.
+  `api_h2c_write`, and (2) satisfy the host blob's *other* dependencies (LiteOS,
+  timers, the controller's remaining exported symbols) — a large surface.
 - **SLE: effectively infeasible.** Proprietary command/event set, no public
   reference, fused into the GLE blob.
+
+### Probe result (the "try it"): HCI is unreachable at runtime, and not raw H4
+
+Two concrete findings from actually attempting the `api_h2c_write` trace:
+
+1. **The HCI boundary is downstream of the radio wall in boot order.** Located
+   `api_h2c_write` in the BT-present firmware by prologue signature
+   (`0x901357ca`; the trimmed build's `0x9012bfe6` matches `application.map`).
+   Running the un-trimmed firmware on `-M bs21` with the B_CTL probe model, that
+   PC is **never executed (0 hits in the instruction trace)** — the `bt`
+   *controller* task brings up the radio and crashes/reboots (core:2, cause
+   0x2045) **before the host ever sends an HCI command**. So you cannot observe
+   the HCI ABI by running the firmware without *first* solving the radio-event
+   problem (the IRQ-26 PHY wall). The HCI boundary sits behind the dead end.
+
+2. **The boundary is a HiSilicon-framed message ABI, not raw H4 HCI.** Static
+   disassembly of the host caller (`gle_hci_send_data.c.obj` →
+   `gle_hci_command_encode_send_tl`) shows `api_h2c_write(a0,a1,a2,a3)` is not
+   "pointer + length to a standard HCI packet": `a0` carries a message *type* in
+   its high byte (`a0>>16`, e.g. `0xc`), `a1`/`a2` carry a code/length, and `a3`
+   points to a small payload assembled on the stack. So the "bridge the host blob
+   to BlueZ/NimBLE over standard H4" shortcut does **not** apply — the framing is
+   private and would itself have to be reverse-engineered.
+
+Net: HCI-boundary virtualization is gated behind the *same* radio wall at runtime
+**and** uses a non-H4 private ABI, so neither runtime observation nor
+standard-tool bridging works without reverse-engineering the closed blobs.
 
 ## Recommendation
 
 1. **Do not pursue radio-MMIO emulation** for functional connectivity — confirmed
    dead end (Boundary 1). Same conclusion for WS63 (identical architecture).
-2. **If connectivity simulation is ever wanted, it is an HCI-boundary effort, BLE
-   only.** The single highest-leverage first probe: **trace `api_h2c_write` (and
-   the host's event-receive callback)** while the un-trimmed firmware runs, dump
-   the bytes, and confirm they decode as standard BLE HCI opcodes (Reset 0x0c03,
-   LE Set Adv Params 0x2006, etc.). If yes, a synthetic controller is buildable;
-   if HiSilicon-wrapped, the cost rises sharply. This mirrors the B_CTL probe and
-   is cheap to run.
+2. **The HCI-boundary probe was run and is refuted as a cheap path** (see "Probe
+   result" above): `api_h2c_write` is unreachable at runtime (radio wall first)
+   and uses a private, non-H4 framing. So an HCI-boundary effort would require
+   building a synthetic controller against the host blob's ABI from *static*
+   reverse engineering only — substantial, BLE-only, no runtime breadcrumbs.
 3. **SLE stays out of scope** — proprietary with no reference implementation.
+
+**Bottom line:** every boundary that could be virtualized (radio MMIO, HCI) is
+either behind closed-blob analog/event timing or behind a private blob-to-blob
+ABI that is itself gated behind the radio wall. Connectivity emulation is not a
+viable next step; the functional-peripheral work is where the leverage is.
 
 ## Reproduce the radio probe
 
