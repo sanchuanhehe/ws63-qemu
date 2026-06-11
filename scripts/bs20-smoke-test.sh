@@ -104,5 +104,22 @@ else
     echo "==> bs20 spi_loopback: SKIP (build examples/bs20/Cargo.toml --release)"
 fi
 
+
+# ---- gadc_read: BS2X 13-bit ADC (v153) driver conversion (GADC model @0x57036000) ----
+GADC_ELF="$TARGET_DIR/bs20_gadc_read"
+if [ -f "$GADC_ELF" ]; then
+    echo "==> bs20 gadc_read on -M bs20: expecting a GADC conversion (chip-bs21 gadc driver)"
+    timeout 5 "$QEMU_BIN" -M bs20 -nographic -serial mon:stdio \
+        -kernel "$GADC_ELF" >"$TMP/gadc.out" 2>/dev/null
+    if grep -q "GADC read OK" "$TMP/gadc.out"; then
+        echo "    PASS: $(grep -m1 'AIN0 raw' "$TMP/gadc.out")"
+    else
+        echo "    FAIL: GADC read not OK. Got:"; grep -a GADC "$TMP/gadc.out" | sed 's/^/      /'
+        fail=1
+    fi
+else
+    echo "==> bs20 gadc_read: SKIP"
+fi
+
 [ "$fail" -eq 0 ] && echo "BS20 SMOKE TEST: PASS" || echo "BS20 SMOKE TEST: FAIL"
 exit "$fail"

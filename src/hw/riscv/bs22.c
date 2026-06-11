@@ -96,6 +96,7 @@
 #define BS22_TCXO_BASE      0x57000200
 #define BS22_TCXO_SIZE      0x00000200   /* TCXO_COUNT block; GLB_CTL_A @0x57000400 */
 #define BS22_SPI0_BASE      0x52087000   /* SPI_M0 (DesignWare SSI v151) */
+#define BS22_GADC_BASE      0x57036000   /* GADC digital block (13-bit ADC v153) */
 
 /* IRQ numbers (chip_core_irq.h, shared across BS2X). 26-31 use standard mie bits;
  * >=32 are LOCI. */
@@ -202,6 +203,10 @@ static void bs22_machine_init(MachineState *machine)
     /* SPI0 (DesignWare SSI v151) TX->RX loopback — functionally exercises the
      * chip-bs21 Rust SPI driver (spi_loopback example). */
     ws63_create_spi_loopback(BS22_SPI0_BASE);
+
+    /* GADC (13-bit ADC v153) digital block — functionally exercises the chip-bs21
+     * Rust gadc driver (gadc_read example). */
+    ws63_create_gadc(BS22_GADC_BASE);
 
     /* UART0/1/2 (custom device on top of the absorber). */
     const hwaddr uart_base[3] = { BS22_UART0_BASE, BS22_UART1_BASE, BS22_UART2_BASE };

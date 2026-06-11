@@ -73,4 +73,10 @@ void ws63_sfc_set_flash_id(DeviceState *dev, uint32_t id);
  * memory; returns it. */
 DeviceState *ws63_create_spi_loopback(hwaddr base);
 
+/* Map a minimal BS2X GADC (13-bit ADC v153) model at @base (its digital block,
+ * 0x57036000): reports sample-done + a fixed result so the chip-bs21 Rust `gadc`
+ * driver completes a conversion. The power/enable handshake (PMU @0x57008700 +
+ * AON iso) falls to the GLB absorber — the driver never polls it. */
+void ws63_create_gadc(hwaddr base);
+
 #endif /* HW_RISCV_HISI_RISCV31_H */

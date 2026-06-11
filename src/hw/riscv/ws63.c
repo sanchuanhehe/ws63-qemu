@@ -1581,6 +1581,52 @@ DeviceState *ws63_create_spi_loopback(hwaddr base)
     return dev;
 }
 
+/* ============================================================================
+ * BS2X GADC (13-bit ADC, v153) digital block @0x57036000 — minimal model so the
+ * chip-bs21 Rust `gadc` driver completes a conversion. The driver's blocking path
+ * polls done = rpt_gadc_data_3 (0x070) bit0 and reads the result from
+ * rpt_gadc_data_2 (0x06C); the ANA/LDO writes (>=0x3D0, within this window) are
+ * shadowed, and the power/enable handshake lives in the PMU block @0x57008700 +
+ * the AON iso bit, which fall to the bs2x GLB absorber (the driver never polls
+ * those). So this stateless model only needs to report "done" + a fixed sample.
+ * ========================================================================== */
+#define WS63_GADC_RESULT     0x00012345u /* test sample (18-bit, positive) */
+#define WS63_GADC_DATA2_OFF  0x06C        /* rpt_gadc_data_2 (result) */
+#define WS63_GADC_DATA3_OFF  0x070        /* rpt_gadc_data_3 (bit0 = sample done) */
+
+static uint64_t ws63_gadc_read(void *opaque, hwaddr off, unsigned size)
+{
+    switch (off) {
+    case WS63_GADC_DATA3_OFF:
+        return 0x1;                 /* sample-done */
+    case WS63_GADC_DATA2_OFF:
+        return WS63_GADC_RESULT;    /* the accumulated 18-bit sample */
+    default:
+        return 0;
+    }
+}
+
+static void ws63_gadc_write(void *opaque, hwaddr off, uint64_t val, unsigned size)
+{
+    /* bring-up / channel-select / config writes: accept + ignore. */
+}
+
+static const MemoryRegionOps ws63_gadc_ops = {
+    .read = ws63_gadc_read,
+    .write = ws63_gadc_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .impl = { .min_access_size = 1, .max_access_size = 4 },
+    .valid = { .min_access_size = 1, .max_access_size = 4 },
+};
+
+/* Shared helper (declared in hisi_riscv31.h): map the GADC model at @base. */
+void ws63_create_gadc(hwaddr base)
+{
+    MemoryRegion *mr = g_new0(MemoryRegion, 1);
+    memory_region_init_io(mr, NULL, &ws63_gadc_ops, NULL, "bs2x.gadc", 0x1000);
+    memory_region_add_subregion(get_system_memory(), base, mr);
+}
+
 /* peripheral instance table (base, kind, window size, name, irq) — from WS63.svd.
  * irq != 0 is connected to the intc (the device raises it via qemu_set_irq). */
 static const struct {
