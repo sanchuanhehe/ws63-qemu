@@ -100,6 +100,8 @@
 #define BS20_I2C0_BASE      0x52083000   /* I2C0 (DesignWare SSI v151) */
 #define BS20_KEYSCAN_BASE   0x5208D000   /* KEYSCAN (key-matrix v150) */
 #define BS20_QDEC_BASE      0x52000200   /* QDEC (quadrature decoder v150) */
+#define BS20_RTC_BASE       0x57024100   /* RTC0 (rtc_unified v150) */
+#define BS20_TRNG_BASE      0x52009000   /* TRNG (v1) */
 
 /* IRQ numbers (chip_core_irq.h, shared across BS2X). 26-31 use standard mie bits;
  * >=32 are LOCI. */
@@ -218,6 +220,10 @@ static void bs20_machine_init(MachineState *machine)
     /* KEYSCAN + QDEC (BS2X HID) — exercise the chip-bs21 keyscan/qdec drivers. */
     ws63_create_keyscan(BS20_KEYSCAN_BASE);
     ws63_create_qdec(BS20_QDEC_BASE);
+
+    /* RTC0 + TRNG — exercise the chip-bs21 rtc/trng drivers. */
+    ws63_create_rtc(BS20_RTC_BASE);
+    ws63_create_trng(BS20_TRNG_BASE);
 
     /* UART0/1/2 (custom device on top of the absorber). */
     const hwaddr uart_base[3] = { BS20_UART0_BASE, BS20_UART1_BASE, BS20_UART2_BASE };

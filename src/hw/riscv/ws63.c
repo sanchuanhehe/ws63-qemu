@@ -1822,6 +1822,113 @@ void ws63_create_qdec(hwaddr base)
     memory_region_add_subregion(get_system_memory(), base, mr);
 }
 
+/* ============================================================================
+ * BS2X RTC0 (rtc_unified v150) @0x57024100 — a free-running counter so the
+ * chip-bs21 Rust `rtc` driver reads an advancing value. Implements the cnt_req →
+ * cnt_lock coherent-read handshake (mandatory, or the 64-bit read spins) and
+ * advances current_value0 on each read so two reads differ.
+ * ========================================================================== */
+#define RTC_CURRENT_VALUE0_OFF  0x08
+#define RTC_CURRENT_VALUE1_OFF  0x0C
+#define RTC_CONTROL_OFF         0x10
+#define RTC_CNT_REQ             (1u << 5)
+#define RTC_CNT_LOCK            (1u << 6)
+
+typedef struct { uint64_t counter; uint32_t control; } WS63RtcState;
+
+static uint64_t ws63_rtc_read(void *opaque, hwaddr off, unsigned size)
+{
+    WS63RtcState *s = opaque;
+    switch (off) {
+    case RTC_CONTROL_OFF:
+        return s->control;
+    case RTC_CURRENT_VALUE0_OFF: {
+        uint32_t lo = (uint32_t)s->counter;
+        s->counter += 0x100;            /* advance so successive reads differ */
+        return lo;
+    }
+    case RTC_CURRENT_VALUE1_OFF:
+        return (uint32_t)(s->counter >> 32);
+    default:
+        return 0;
+    }
+}
+
+static void ws63_rtc_write(void *opaque, hwaddr off, uint64_t val, unsigned size)
+{
+    WS63RtcState *s = opaque;
+    if (off == RTC_CONTROL_OFF) {
+        s->control = (uint32_t)val;
+        if (val & RTC_CNT_REQ) {
+            s->control |= RTC_CNT_LOCK; /* grant the read-lock immediately */
+        }
+    }
+}
+
+static const MemoryRegionOps ws63_rtc_ops = {
+    .read = ws63_rtc_read,
+    .write = ws63_rtc_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .impl = { .min_access_size = 1, .max_access_size = 4 },
+    .valid = { .min_access_size = 1, .max_access_size = 4 },
+};
+
+void ws63_create_rtc(hwaddr base)
+{
+    WS63RtcState *s = g_new0(WS63RtcState, 1);
+    s->counter = 0x1000;
+    MemoryRegion *mr = g_new0(MemoryRegion, 1);
+    memory_region_init_io(mr, NULL, &ws63_rtc_ops, s, "bs2x.rtc", 0x20);
+    memory_region_add_subregion(get_system_memory(), base, mr);
+}
+
+/* ============================================================================
+ * BS2X TRNG (v1) @0x52009000 — FIFO always ready+done, data varies per read (an
+ * xorshift) so the chip-bs21 Rust `trng` driver reads non-constant randoms.
+ * ========================================================================== */
+#define TRNG_FIFO_DATA_OFF   0x100
+#define TRNG_FIFO_READY_OFF  0x104
+
+typedef struct { uint32_t rng; } WS63TrngState;
+
+static uint64_t ws63_trng_read(void *opaque, hwaddr off, unsigned size)
+{
+    WS63TrngState *s = opaque;
+    switch (off) {
+    case TRNG_FIFO_READY_OFF:
+        return 0x3;                     /* trng_data_ready(0) | trng_done(1) */
+    case TRNG_FIFO_DATA_OFF:
+        s->rng ^= s->rng << 13;
+        s->rng ^= s->rng >> 17;
+        s->rng ^= s->rng << 5;
+        return s->rng;
+    default:
+        return 0;
+    }
+}
+
+static void ws63_trng_write(void *opaque, hwaddr off, uint64_t val, unsigned size)
+{
+    /* ring-enable / ctrl writes: accept + ignore. */
+}
+
+static const MemoryRegionOps ws63_trng_ops = {
+    .read = ws63_trng_read,
+    .write = ws63_trng_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .impl = { .min_access_size = 1, .max_access_size = 4 },
+    .valid = { .min_access_size = 1, .max_access_size = 4 },
+};
+
+void ws63_create_trng(hwaddr base)
+{
+    WS63TrngState *s = g_new0(WS63TrngState, 1);
+    s->rng = 0x2463534au;               /* nonzero xorshift seed */
+    MemoryRegion *mr = g_new0(MemoryRegion, 1);
+    memory_region_init_io(mr, NULL, &ws63_trng_ops, s, "bs2x.trng", 0x1000);
+    memory_region_add_subregion(get_system_memory(), base, mr);
+}
+
 /* peripheral instance table (base, kind, window size, name, irq) — from WS63.svd.
  * irq != 0 is connected to the intc (the device raises it via qemu_set_irq). */
 static const struct {

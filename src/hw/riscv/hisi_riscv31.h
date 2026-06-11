@@ -93,4 +93,11 @@ void ws63_create_keyscan(hwaddr base);
  * count (-5) + error count (2) so the chip-bs21 Rust qdec driver reads them back. */
 void ws63_create_qdec(hwaddr base);
 
+/* Map a BS2X RTC0 (rtc_unified v150) model at @base: a free-running counter with
+ * the cnt_req/cnt_lock coherent-read handshake, advancing per read. */
+void ws63_create_rtc(hwaddr base);
+
+/* Map a BS2X TRNG (v1) model at @base: FIFO always ready, data varies per read. */
+void ws63_create_trng(hwaddr base);
+
 #endif /* HW_RISCV_HISI_RISCV31_H */

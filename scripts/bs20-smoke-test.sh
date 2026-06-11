@@ -155,5 +155,22 @@ else
     echo "==> bs20 hid_demo: SKIP"
 fi
 
+
+# ---- clock_rng: BS2X RTC (v150) + TRNG (v1) drivers ----
+CRNG_ELF="$TARGET_DIR/bs20_clock_rng"
+if [ -f "$CRNG_ELF" ]; then
+    echo "==> bs20 clock_rng on -M bs20: expecting RTC counter advance + TRNG randoms (chip-bs21)"
+    timeout 5 "$QEMU_BIN" -M bs20 -nographic -serial mon:stdio \
+        -kernel "$CRNG_ELF" >"$TMP/crng.out" 2>/dev/null
+    if grep -q "RTC+TRNG OK" "$TMP/crng.out"; then
+        echo "    PASS: $(grep -m1 'rtc c1' "$TMP/crng.out") / $(grep -m1 'trng r1' "$TMP/crng.out")"
+    else
+        echo "    FAIL: RTC+TRNG not OK. Got:"; grep -aE 'rtc|trng|RTC' "$TMP/crng.out" | sed 's/^/      /'
+        fail=1
+    fi
+else
+    echo "==> bs20 clock_rng: SKIP"
+fi
+
 [ "$fail" -eq 0 ] && echo "BS20 SMOKE TEST: PASS" || echo "BS20 SMOKE TEST: FAIL"
 exit "$fail"
