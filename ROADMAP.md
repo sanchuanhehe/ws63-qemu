@@ -1,7 +1,7 @@
 # ws63-qemu 路线图（ROADMAP）
 
 > 本路线图记录 `ws63-qemu` 的目标、已交付内容与剩余工作。
-> **现状(v0.3.0)**:已是一个**单核 SoC 行为保真、能在无硬件下验证 [ws63-rs](https://github.com/sanchuanhehe/ws63-rs)
+> **现状(v0.3.0)**:已是一个**单核 SoC 行为保真、能在无硬件下验证 [ws63-rs](https://github.com/hispark-rs/ws63-rs)
 > 驱动并运行 fbb_ws63 C SDK 厂商固件**的仿真器——最初规划的「从 MVP 成长为单核 SoC 保真器」目标(阶段 0–4)
 > **已基本达成**。连接性底座(合成 MAC + SLIRP 的 ping/UDP 软件路径)已完成;剩余的是测试基建打磨、
 > 可维护性/上游,以及真实 Wi-Fi 栈(blob)这一可选远期尾部。
@@ -139,7 +139,7 @@ system reset、IO_CONFIG pinmux 路由亦已建模。完整矩阵见 [`docs/desi
   删去 `ws63_pclk_hz`/`WS63_PLL_HZ`);与 ws63-rs HAL 的 timer/WDT 时钟修复一致,smoke-test 全绿。
 - **eFuse / LSADC** 已最小建模并**行为完整**——把原先静态对照 SDK 的修复变成可执行验证(LSADC `ctrl_8/9` 转换、EFUSE 读窗口)。
 - **本质受限**(非缺陷):UART 波特、SPI 分频等时序在 QEMU chardev 不限速下**不可观测**,故源/分频仅记录状态。
-  完整时钟树(FNPLL 2880 MHz + CLDO_CRG)已在 [ws63-guide ch8](https://github.com/sanchuanhehe/ws63-guide) 实证落盘。
+  完整时钟树(FNPLL 2880 MHz + CLDO_CRG)已在 [ws63-guide ch8](https://github.com/hispark-rs/ws63-guide) 实证落盘。
 
 ---
 

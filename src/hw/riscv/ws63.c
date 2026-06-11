@@ -4,7 +4,7 @@
  * WS63 is a Wi-Fi 6 + BLE + SLE (SparkLink) combo SoC built around a single
  * RV32IMFC_Zicsr hart (hardware single-precision float, NO atomic extension),
  * 240 MHz. This board models enough of the SoC to run bare-metal ws63-rs
- * firmware (https://github.com/sanchuanhehe/ws63-rs).
+ * firmware (https://github.com/hispark-rs/ws63-rs).
  *
  * Modeled (real): RV32IMFC CPU, memory map (from ws63-rt/memory.x), custom
  * HiSilicon UART (x3), TIMER (x3, with interrupt), GPIO (x3, output + int regs),

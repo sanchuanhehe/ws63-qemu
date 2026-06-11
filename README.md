@@ -1,7 +1,7 @@
 # ws63-qemu
 
 在 **QEMU** 上仿真 HiSilicon **WS63**（RISC-V RV32IMFC，Wi-Fi 6 + BLE + SLE/星闪 SoC），
-用于无硬件运行 [`ws63-rs`](https://github.com/sanchuanhehe/ws63-rs) 裸机固件。
+用于无硬件运行 [`ws63-rs`](https://github.com/hispark-rs/ws63-rs) 裸机固件。
 
 仿照 [esp-qemu](https://github.com/espressif/qemu) 的做法：fork 一个固定版本的 QEMU，加入一个
 in-tree 板卡文件 `hw/riscv/ws63.c`（WS63 机器模型 + 自定义 UART），只构建 `riscv32-softmmu`。

@@ -2,7 +2,7 @@
 
 ## 目标
 
-在 QEMU 上仿真 HiSilicon WS63（RISC-V）SoC，让 [`ws63-rs`](https://github.com/sanchuanhehe/ws63-rs)
+在 QEMU 上仿真 HiSilicon WS63（RISC-V）SoC，让 [`ws63-rs`](https://github.com/hispark-rs/ws63-rs)
 裸机固件（blinky、UART 打印）无需真实硬件即可运行——为 ROADMAP 阶段 1「硬件在环 bring-up」
 提供一个**软件在环**替代信号：证明内存布局、startup（PMP/FPU/cache/栈/数据重定位）、链接脚本
 在一个 WS63 地址空间模型上能正确跑起来。

@@ -222,7 +222,7 @@ vendor-compiled firmware without hardware.
 - **Tooling**: `scripts/{build,run,smoke-test,setup-deps}.sh`, a tag-triggered
   release workflow, and the `ROADMAP.md` / `docs/design.md` documentation set.
 
-[Unreleased]: https://github.com/sanchuanhehe/ws63-qemu/compare/v0.3.0...HEAD
-[0.3.0]: https://github.com/sanchuanhehe/ws63-qemu/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/sanchuanhehe/ws63-qemu/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/sanchuanhehe/ws63-qemu/releases/tag/v0.1.0
+[Unreleased]: https://github.com/hispark-rs/ws63-qemu/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/hispark-rs/ws63-qemu/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/hispark-rs/ws63-qemu/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/hispark-rs/ws63-qemu/releases/tag/v0.1.0

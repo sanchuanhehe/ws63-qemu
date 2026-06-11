@@ -4,7 +4,7 @@
 适用版本:**v0.3.0**(`qemu-system-riscv32 -M ws63`,QEMU v10.0.0 fork〔另维护 v10.2.3 + v11.0.1 + v9.2.4〕 + HiSilicon xlinx 自定义 ISA)。
 
 > 它是什么:在无 WS63 硬件(EVB)的情况下,运行**未经修改的、厂商/工具链编译的 WS63 固件**——既能跑
-> [`ws63-rs`](https://github.com/sanchuanhehe/ws63-rs)(Rust 裸机),也能跑 fbb_ws63 **C SDK**(flashboot +
+> [`ws63-rs`](https://github.com/hispark-rs/ws63-rs)(Rust 裸机),也能跑 fbb_ws63 **C SDK**(flashboot +
 > LiteOS app)。它是 **软件在环(SIL)** 的驱动验证底座,**不是**周期精确的微架构模拟器。
 >
 > 想了解内部设计而非如何使用,请读 [`design.md`](design.md);本手册只讲怎么装、怎么用、验了什么。
@@ -48,7 +48,7 @@
 
 ### 1.2 方式 A:下载预编译 Release(最快)
 
-从 [Releases](https://github.com/sanchuanhehe/ws63-qemu/releases) 下载对应版本资产:
+从 [Releases](https://github.com/hispark-rs/ws63-qemu/releases) 下载对应版本资产:
 
 | 资产 | 说明 |
 |------|------|
@@ -103,7 +103,7 @@ bash scripts/build.sh
 **(a) ws63-rs(Rust 裸机)** —— 需要 `ws63` 自定义 Rust 工具链(rv32imfc 硬浮点、无原子,内置为 builtin target):
 
 ```bash
-curl -fLO https://github.com/sanchuanhehe/ws63-rust-toolchain/releases/download/v1.96.0/ws63-rust-1.96.0-x86_64-unknown-linux-gnu.tar.gz
+curl -fLO https://github.com/hispark-rs/ws63-rust-toolchain/releases/download/v1.96.0/ws63-rust-1.96.0-x86_64-unknown-linux-gnu.tar.gz
 tar xzf ws63-rust-1.96.0-*.tar.gz && rustup toolchain link ws63 "$PWD/stage2"
 # 在 ws63-rs 仓库中:
 cargo build -p blinky --release
