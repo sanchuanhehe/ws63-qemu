@@ -1993,17 +1993,48 @@ DeviceState *ws63_create_dma(hwaddr base)
     return dev;
 }
 
-/* BS2X PDM (audio mic v150) @0x5208E000 — version reg reads a known ID so the
- * chip-bs21 pdm driver's bring-up + version read verifies; the PCM data path is
- * DMA-fed and not modelled. */
+/* BS2X PDM (audio mic v150) @0x5208E000 — version reg + a running audio source so
+ * the chip-bs21 pdm driver captures real PCM. Once the datapath reset is released
+ * (clk_rst_en@0x04 bit0 pdm_dp_rst_n=1), up_fifo_st (0x30) reads not-empty and the
+ * FIFO data window (0x80) returns an ascending ramp ((n+1)<<16) per read, so a
+ * capture of N samples yields a verifiable ascending buffer. */
+#define PDM_CLK_RST_EN_OFF  0x04
+#define PDM_UP_FIFO_ST_OFF  0x30
+#define PDM_FIFO_DATA_OFF   0x80
+#define PDM_DP_RST_N        (1u << 0)
+#define PDM_UP_FIFO_EMPTY   (1u << 2)
+#define PDM_UP_FIFO_AFULL   (1u << 1)
+
+typedef struct { bool running; uint32_t ramp; } WS63PdmState;
+
 static uint64_t ws63_pdm_read(void *opaque, hwaddr off, unsigned size)
 {
+    WS63PdmState *s = opaque;
     if (off == 0x00) {
-        return 0x00000150;          /* PDM IP version */
+        return 0x00000150;              /* PDM IP version */
+    }
+    if (off == PDM_UP_FIFO_ST_OFF) {
+        /* running -> not empty (afull set, empty clear); else empty. */
+        return s->running ? PDM_UP_FIFO_AFULL : PDM_UP_FIFO_EMPTY;
+    }
+    if (off >= PDM_FIFO_DATA_OFF && off < PDM_FIFO_DATA_OFF + 0x80) {
+        if (!s->running) {
+            return 0;
+        }
+        s->ramp++;
+        return s->ramp << 16;           /* PCM sample (meaningful bits are [31:16]) */
     }
     return 0;
 }
-static void ws63_pdm_write(void *opaque, hwaddr off, uint64_t val, unsigned size) { }
+
+static void ws63_pdm_write(void *opaque, hwaddr off, uint64_t val, unsigned size)
+{
+    WS63PdmState *s = opaque;
+    if (off == PDM_CLK_RST_EN_OFF) {
+        s->running = (val & PDM_DP_RST_N) != 0;   /* datapath-reset release = run */
+    }
+}
+
 static const MemoryRegionOps ws63_pdm_ops = {
     .read = ws63_pdm_read, .write = ws63_pdm_write,
     .endianness = DEVICE_LITTLE_ENDIAN,
@@ -2012,22 +2043,66 @@ static const MemoryRegionOps ws63_pdm_ops = {
 };
 void ws63_create_pdm(hwaddr base)
 {
+    WS63PdmState *s = g_new0(WS63PdmState, 1);
     MemoryRegion *mr = g_new0(MemoryRegion, 1);
-    memory_region_init_io(mr, NULL, &ws63_pdm_ops, NULL, "bs2x.pdm", 0x1000);
+    memory_region_init_io(mr, NULL, &ws63_pdm_ops, s, "bs2x.pdm", 0x1000);
     memory_region_add_subregion(get_system_memory(), base, mr);
 }
 
-/* BS2X USB (Synopsys DWC OTG) @0x58000000 — GSNPSID (0x40) reads the core ID so
- * the chip-bs21 usb driver's presence check passes. Maps on top of the USB
- * absorber; the full USB stack is not modelled. */
+/* BS2X USB (Synopsys DWC2 OTG) @0x58000000 — enough of the device-mode core to let
+ * the chip-bs21 usb driver complete a full device bring-up: GSNPSID reads the core
+ * ID; GRSTCTL self-clears CSFTRST + always reads AHBIDLE; and when the guest
+ * soft-connects (clears DCTL.SFTDISCON) the model simulates the host reset +
+ * enumeration by raising GINTSTS.USBRST + ENUMDONE (read until W1C-cleared), with
+ * DSTS reporting high speed. Maps on top of the USB absorber. */
+#define USB_GRSTCTL_OFF  0x010
+#define USB_GINTSTS_OFF  0x014
+#define USB_GSNPSID_OFF  0x040
+#define USB_DCTL_OFF     0x804
+#define USB_DSTS_OFF     0x808
+#define USB_GRSTCTL_CSFTRST  (1u << 0)
+#define USB_GRSTCTL_AHBIDLE  (1u << 31)
+#define USB_GINTSTS_USBRST   (1u << 12)
+#define USB_GINTSTS_ENUMDONE (1u << 13)
+#define USB_DCTL_SFTDISCON   (1u << 1)
+
+typedef struct { uint32_t gintsts; } WS63UsbState;
+
 static uint64_t ws63_usb_read(void *opaque, hwaddr off, unsigned size)
 {
-    if (off == 0x40) {
-        return 0x4F54300Au;          /* DWC OTG core ID ("OT" + release) */
+    WS63UsbState *s = opaque;
+    switch (off) {
+    case USB_GSNPSID_OFF:
+        return 0x4F54300Au;             /* DWC OTG core ID ("OT" + release) */
+    case USB_GRSTCTL_OFF:
+        return USB_GRSTCTL_AHBIDLE;     /* AHB idle; CSFTRST already self-cleared */
+    case USB_GINTSTS_OFF:
+        return s->gintsts;
+    case USB_DSTS_OFF:
+        return 0;                       /* ENUMSPD=0 (high speed), SUSPSTS=0 */
+    default:
+        return 0;
     }
-    return 0;
 }
-static void ws63_usb_write(void *opaque, hwaddr off, uint64_t val, unsigned size) { }
+
+static void ws63_usb_write(void *opaque, hwaddr off, uint64_t val, unsigned size)
+{
+    WS63UsbState *s = opaque;
+    switch (off) {
+    case USB_GINTSTS_OFF:
+        s->gintsts &= ~(uint32_t)val;   /* write-1-to-clear */
+        break;
+    case USB_DCTL_OFF:
+        if (!(val & USB_DCTL_SFTDISCON)) {
+            /* soft-connect -> host resets + enumerates the device */
+            s->gintsts |= USB_GINTSTS_USBRST | USB_GINTSTS_ENUMDONE;
+        }
+        break;
+    default:
+        break;
+    }
+}
+
 static const MemoryRegionOps ws63_usb_ops = {
     .read = ws63_usb_read, .write = ws63_usb_write,
     .endianness = DEVICE_LITTLE_ENDIAN,
@@ -2036,8 +2111,9 @@ static const MemoryRegionOps ws63_usb_ops = {
 };
 void ws63_create_usb(hwaddr base)
 {
+    WS63UsbState *s = g_new0(WS63UsbState, 1);
     MemoryRegion *mr = g_new0(MemoryRegion, 1);
-    memory_region_init_io(mr, NULL, &ws63_usb_ops, NULL, "bs2x.usb.core", 0x1000);
+    memory_region_init_io(mr, NULL, &ws63_usb_ops, s, "bs2x.usb.core", 0x1000);
     memory_region_add_subregion_overlap(get_system_memory(), base, mr, 1);
 }
 
