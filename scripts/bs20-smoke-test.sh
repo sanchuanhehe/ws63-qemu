@@ -185,5 +185,18 @@ if [ -f "$PW_ELF" ]; then
     fi
 else echo "==> bs20 pwm_wdt: SKIP"; fi
 
+
+# ---- dma_mem: BS2X MDMA (v151) memory-to-memory transfer ----
+DMA_ELF="$TARGET_DIR/bs20_dma_mem"
+if [ -f "$DMA_ELF" ]; then
+    echo "==> bs20 dma_mem on -M bs20: expecting a mem-to-mem copy (chip-bs21 dma driver)"
+    timeout 5 "$QEMU_BIN" -M bs20 -nographic -serial mon:stdio -kernel "$DMA_ELF" >"$TMP/dma.out" 2>/dev/null
+    if grep -q "DMA OK" "$TMP/dma.out"; then
+        echo "    PASS: DMA mem-to-mem copy verified"
+    else
+        echo "    FAIL: DMA not OK. Got:"; grep -aE 'DMA' "$TMP/dma.out" | sed 's/^/      /'; fail=1
+    fi
+else echo "==> bs20 dma_mem: SKIP"; fi
+
 [ "$fail" -eq 0 ] && echo "BS20 SMOKE TEST: PASS" || echo "BS20 SMOKE TEST: FAIL"
 exit "$fail"

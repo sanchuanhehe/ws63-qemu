@@ -103,6 +103,7 @@
 #define BS20_RTC_BASE       0x57024100   /* RTC0 (rtc_unified v150) */
 #define BS20_TRNG_BASE      0x52009000   /* TRNG (v1) */
 #define BS20_WDT_BASE       0x52003000   /* WDT (watchdog v151) */
+#define BS20_DMA_BASE       0x52070000   /* MDMA (v151) */
 
 /* IRQ numbers (chip_core_irq.h, shared across BS2X). 26-31 use standard mie bits;
  * >=32 are LOCI. */
@@ -228,6 +229,9 @@ static void bs20_machine_init(MachineState *machine)
 
     /* WDT (watchdog v151) — exercises the chip-bs21 wdt driver. */
     ws63_create_wdt(BS20_WDT_BASE);
+
+    /* MDMA (v151) — mem-to-mem copy, exercises the chip-bs21 dma driver. */
+    ws63_create_dma(BS20_DMA_BASE);
 
     /* UART0/1/2 (custom device on top of the absorber). */
     const hwaddr uart_base[3] = { BS20_UART0_BASE, BS20_UART1_BASE, BS20_UART2_BASE };

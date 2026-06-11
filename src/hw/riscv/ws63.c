@@ -1980,6 +1980,19 @@ void ws63_create_wdt(hwaddr base)
     memory_region_add_subregion(get_system_memory(), base, mr);
 }
 
+/* Shared helper: a PK_DMA controller (real mem-to-mem copy on channel-enable) at
+ * @base, so the bs2x machines can functionally exercise the Rust DMA driver. */
+DeviceState *ws63_create_dma(hwaddr base)
+{
+    DeviceState *dev = qdev_new(TYPE_WS63_PERIPH);
+    WS63PeriphState *s = WS63_PERIPH(dev);
+    s->kind = PK_DMA;
+    s->size = 0x1000;
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, base);
+    return dev;
+}
+
 /* peripheral instance table (base, kind, window size, name, irq) — from WS63.svd.
  * irq != 0 is connected to the intc (the device raises it via qemu_set_irq). */
 static const struct {

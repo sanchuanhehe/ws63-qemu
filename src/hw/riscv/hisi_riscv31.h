@@ -105,4 +105,8 @@ void ws63_create_trng(hwaddr base);
  * configured timeout. */
 void ws63_create_wdt(hwaddr base);
 
+/* Map a PK_DMA controller (real memory-to-memory copy on channel-enable) at @base
+ * so the bs2x machines can functionally exercise the Rust DMA mem-to-mem path. */
+DeviceState *ws63_create_dma(hwaddr base);
+
 #endif /* HW_RISCV_HISI_RISCV31_H */
