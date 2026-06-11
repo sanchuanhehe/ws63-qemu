@@ -1727,6 +1727,101 @@ void ws63_create_i2c(hwaddr base)
     memory_region_add_subregion(get_system_memory(), base, mr);
 }
 
+/* ============================================================================
+ * BS2X KEYSCAN (key-matrix scanner, v150) @0x5208D000 — reports one fixed key so
+ * the chip-bs21 Rust `keyscan` driver decodes a known (row,col,pressed). Once the
+ * scan task is started, EVENT_STS reads ready and KEY_VALUE_FIFO yields the key
+ * once (then the empty marker 0x0FF).
+ * ========================================================================== */
+#define KEYSCAN_START_OFF      0x10
+#define KEYSCAN_EVENT_STS_OFF  0x28
+#define KEYSCAN_FIFO_OFF       0x94
+#define KEYSCAN_KEY_VALUE      0x111u /* key[8]=pressed, key[7:3]=row=2, key[2:0]=col=1 */
+#define KEYSCAN_FIFO_EMPTY     0x0FFu
+
+typedef struct { bool key_pending; } WS63KeyscanState;
+
+static uint64_t ws63_keyscan_read(void *opaque, hwaddr off, unsigned size)
+{
+    WS63KeyscanState *s = opaque;
+    switch (off) {
+    case KEYSCAN_EVENT_STS_OFF:
+        return s->key_pending ? 0x0A : 0; /* key_press(1) | key_value_rdy(3) */
+    case KEYSCAN_FIFO_OFF:
+        if (s->key_pending) {
+            s->key_pending = false;
+            return KEYSCAN_KEY_VALUE;
+        }
+        return KEYSCAN_FIFO_EMPTY;
+    default:
+        return 0;
+    }
+}
+
+static void ws63_keyscan_write(void *opaque, hwaddr off, uint64_t val, unsigned size)
+{
+    WS63KeyscanState *s = opaque;
+    if (off == KEYSCAN_START_OFF && (val & 0x1)) {
+        s->key_pending = true; /* a scan started -> a key becomes available */
+    }
+}
+
+static const MemoryRegionOps ws63_keyscan_ops = {
+    .read = ws63_keyscan_read,
+    .write = ws63_keyscan_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .impl = { .min_access_size = 1, .max_access_size = 4 },
+    .valid = { .min_access_size = 1, .max_access_size = 4 },
+};
+
+void ws63_create_keyscan(hwaddr base)
+{
+    WS63KeyscanState *s = g_new0(WS63KeyscanState, 1);
+    MemoryRegion *mr = g_new0(MemoryRegion, 1);
+    memory_region_init_io(mr, NULL, &ws63_keyscan_ops, s, "bs2x.keyscan", 0x1000);
+    memory_region_add_subregion(get_system_memory(), base, mr);
+}
+
+/* ============================================================================
+ * BS2X QDEC (quadrature decoder, v150) @0x52000200 — returns a fixed SIGNED count
+ * so the chip-bs21 Rust `qdec` driver reads a known value. ACC=0xFFFB so the
+ * driver's `as i16` yields -5 (exercises the signed decode); ACCDBL=2.
+ * ========================================================================== */
+#define QDEC_ACC_DATA_OFF     0x54
+#define QDEC_ACCDBL_DATA_OFF  0x58
+
+static uint64_t ws63_qdec_read(void *opaque, hwaddr off, unsigned size)
+{
+    switch (off) {
+    case QDEC_ACC_DATA_OFF:
+        return 0xFFFBu;   /* (i16)0xFFFB = -5 */
+    case QDEC_ACCDBL_DATA_OFF:
+        return 0x2u;
+    default:
+        return 0;
+    }
+}
+
+static void ws63_qdec_write(void *opaque, hwaddr off, uint64_t val, unsigned size)
+{
+    /* enable / task-start / config writes: accept + ignore. */
+}
+
+static const MemoryRegionOps ws63_qdec_ops = {
+    .read = ws63_qdec_read,
+    .write = ws63_qdec_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .impl = { .min_access_size = 1, .max_access_size = 4 },
+    .valid = { .min_access_size = 1, .max_access_size = 4 },
+};
+
+void ws63_create_qdec(hwaddr base)
+{
+    MemoryRegion *mr = g_new0(MemoryRegion, 1);
+    memory_region_init_io(mr, NULL, &ws63_qdec_ops, NULL, "bs2x.qdec", 0x1000);
+    memory_region_add_subregion(get_system_memory(), base, mr);
+}
+
 /* peripheral instance table (base, kind, window size, name, irq) — from WS63.svd.
  * irq != 0 is connected to the intc (the device raises it via qemu_set_irq). */
 static const struct {

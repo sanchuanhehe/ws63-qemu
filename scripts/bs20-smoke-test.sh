@@ -138,5 +138,22 @@ else
     echo "==> bs20 i2c_scan: SKIP"
 fi
 
+
+# ---- hid_demo: BS2X KEYSCAN + QDEC (v150) drivers ----
+HID_ELF="$TARGET_DIR/bs20_hid_demo"
+if [ -f "$HID_ELF" ]; then
+    echo "==> bs20 hid_demo on -M bs20: expecting KEYSCAN key + QDEC count (chip-bs21 drivers)"
+    timeout 5 "$QEMU_BIN" -M bs20 -nographic -serial mon:stdio \
+        -kernel "$HID_ELF" >"$TMP/hid.out" 2>/dev/null
+    if grep -q "HID demo OK" "$TMP/hid.out"; then
+        echo "    PASS: $(grep -m1 'key:' "$TMP/hid.out") / $(grep -m1 'qdec count' "$TMP/hid.out")"
+    else
+        echo "    FAIL: HID demo not OK. Got:"; grep -aE 'key:|qdec|HID' "$TMP/hid.out" | sed 's/^/      /'
+        fail=1
+    fi
+else
+    echo "==> bs20 hid_demo: SKIP"
+fi
+
 [ "$fail" -eq 0 ] && echo "BS20 SMOKE TEST: PASS" || echo "BS20 SMOKE TEST: FAIL"
 exit "$fail"

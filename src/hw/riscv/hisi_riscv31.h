@@ -84,4 +84,13 @@ void ws63_create_gadc(hwaddr base);
  * STOP_DET; absent = TX_ABRT + addr_7b_noack). */
 void ws63_create_i2c(hwaddr base);
 
+/* Map a BS2X KEYSCAN (key-matrix scanner v150) model at @base: once the scan task
+ * starts it reports one fixed key (row 2, col 1, pressed) so the chip-bs21 Rust
+ * keyscan driver decodes a known event. */
+void ws63_create_keyscan(hwaddr base);
+
+/* Map a BS2X QDEC (quadrature decoder v150) model at @base: returns a fixed signed
+ * count (-5) + error count (2) so the chip-bs21 Rust qdec driver reads them back. */
+void ws63_create_qdec(hwaddr base);
+
 #endif /* HW_RISCV_HISI_RISCV31_H */
