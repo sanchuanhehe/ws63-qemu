@@ -1,0 +1,49 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ws63-rs <noreply@anthropic.com>
+Date: Thu, 12 Jun 2026 20:00:00 +0800
+Subject: [PATCH] hw/riscv: register the HiSilicon BS21E machine (minimal/M1)
+
+Build-system integration for hw/riscv/bs21e.c (the minimal BS21E / BS2X machine,
+copied into the tree alongside this series). Like bs21.c/bs22.c, bs21e.c reuses
+the shared HiSilicon riscv31 device models from ws63.c via hisi_riscv31.h, so
+CONFIG_BS21E selects CONFIG_WS63 (which compiles ws63.c and the shared models).
+
+BS21E is the SDK SKU our generic "bs21" maps to; it is register- and
+memory-identical to BS21 and BS22 at the milestone-1 level (the whole BS2X family
+shares platform_core.h peripheral bases + chip_core_irq.h IRQ numbers, and BS21E's
+160K L2RAM layout matches BS22's), so the same bare-metal bs2x firmware
+(examples/bs21/*, --features chip-bs21) boots on -M bs21e. `-M bs21e` is the clean
+M1 + full functional-peripheral machine (the same shape as -M bs22), distinct from
+-M bs21 only in that it omits bs21.c's vendor-C-SDK boot facilities.
+
+Adds the CONFIG_BS21E meson source entry and the Kconfig symbol (default y on
+RISCV32, selects UNIMP + WS63). Registers `-M bs21e`.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+---
+ hw/riscv/Kconfig     | 7 +++++++
+ hw/riscv/meson.build | 1 +
+ 2 files changed, 8 insertions(+)
+diff --git a/hw/riscv/Kconfig b/hw/riscv/Kconfig
+--- a/hw/riscv/Kconfig
++++ b/hw/riscv/Kconfig
+@@ -146,3 +146,10 @@ config BS20
+     depends on RISCV32
+     select UNIMP
+     select WS63
++
++config BS21E
++    bool
++    default y
++    depends on RISCV32
++    select UNIMP
++    select WS63
+diff --git a/hw/riscv/meson.build b/hw/riscv/meson.build
+--- a/hw/riscv/meson.build
++++ b/hw/riscv/meson.build
+@@ -18,4 +18,5 @@ riscv_ss.add(when: 'CONFIG_WS63', if_true: files('ws63.c'))
+ riscv_ss.add(when: 'CONFIG_BS21', if_true: files('bs21.c'))
+ riscv_ss.add(when: 'CONFIG_BS22', if_true: files('bs22.c'))
+ riscv_ss.add(when: 'CONFIG_BS20', if_true: files('bs20.c'))
++riscv_ss.add(when: 'CONFIG_BS21E', if_true: files('bs21e.c'))
+ hw_arch += {'riscv': riscv_ss}

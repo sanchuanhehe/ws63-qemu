@@ -52,6 +52,7 @@ cp "$HERE/src/hw/riscv/hisi_riscv31.h"                    "$QEMU_DIR/hw/riscv/hi
 cp "$HERE/src/hw/riscv/bs21.c"                            "$QEMU_DIR/hw/riscv/bs21.c"
 cp "$HERE/src/hw/riscv/bs22.c"                            "$QEMU_DIR/hw/riscv/bs22.c"
 cp "$HERE/src/hw/riscv/bs20.c"                            "$QEMU_DIR/hw/riscv/bs20.c"
+cp "$HERE/src/hw/riscv/bs21e.c"                           "$QEMU_DIR/hw/riscv/bs21e.c"
 cp "$HERE/src/target/riscv/insn_trans/trans_xlinx.c.inc" "$QEMU_DIR/target/riscv/insn_trans/trans_xlinx.c.inc"
 cp "$HERE/src/tests/qtest/ws63-test.c"                    "$QEMU_DIR/tests/qtest/ws63-test.c"
 
