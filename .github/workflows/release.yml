@@ -1,8 +1,20 @@
 name: release
 
-# Tag-triggered release: build the WS63 QEMU (qemu-system-riscv32 with -M ws63),
-# verify the machine + xlinx ISA boot a firmware, and publish a GitHub Release
-# with the emulator binary, a source bundle, and checksums.
+# Tag-triggered multi-platform release: build qemu-system-riscv32 (the HiSilicon
+# WS63 / BS2X fork — machines -M ws63 / bs21 / bs21e / bs22 / bs20 + the xlinx
+# custom RISC-V ISA) on Linux (x86_64 + aarch64), macOS (Apple Silicon) and
+# Windows (x86_64, experimental); package a RUNNABLE per-host archive (binary +
+# bundled libs); then publish ONE GitHub Release with every host artifact, a
+# combined SHA256SUMS, and the overlay source bundle.
+#
+# Linux x86_64 stays identical to the historical single-platform release (same
+# deps/build/smoke), and still emits the legacy bare-binary asset + source bundle
+# so existing download URLs keep working — the per-host runnable tarballs are
+# added alongside.
+#
+# NOTE: there is no free Intel-macOS GitHub runner anymore (macos-13 retired
+# 2025-12-08), so x86_64-darwin is not built; Apple-Silicon (macos-14) covers
+# macOS, and Intel-mac users can build from the source bundle via scripts/build.sh.
 on:
   push:
     tags:
@@ -16,43 +28,176 @@ env:
   QEMU_TAG: v10.0.0
 
 jobs:
-  release:
-    name: Build + publish WS63 QEMU
-    runs-on: ubuntu-latest
+  build:
+    name: build (${{ matrix.host }})
+    runs-on: ${{ matrix.runner }}
+    continue-on-error: ${{ matrix.experimental || false }}
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - host: x86_64-linux
+            runner: ubuntu-latest
+            shell: bash
+          - host: aarch64-linux
+            runner: ubuntu-24.04-arm
+            shell: bash
+          - host: aarch64-darwin
+            runner: macos-14
+            shell: bash
+          - host: x86_64-windows
+            runner: windows-latest
+            shell: 'msys2 {0}'
+            experimental: true
+
     steps:
+      # Windows: force LF before checkout so git-apply of the (Linux-authored)
+      # patch-series + overlay .c isn't corrupted by CRLF. cmd shell — runs
+      # before msys2 is set up.
+      - name: Force LF checkout (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+
       - uses: actions/checkout@v5
+
+      - name: Setup MSYS2 (Windows)
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          pacboy: >-
+            toolchain:p ninja:p meson:p python:p python-setuptools:p pkgconf:p
+            glib2:p pixman:p libslirp:p zlib:p zstd:p
+          install: >-
+            base-devel git bison flex make diffutils zip
 
       - name: Install build deps
         run: bash scripts/setup-deps.sh
 
+      # Cache the cloned+built QEMU tree. Key on matrix.host: both Linux arches
+      # report runner.os=Linux, so they must not share a tree (ELF arch differs;
+      # macOS Mach-O / Windows PE differ too).
       - name: Cache QEMU build
         uses: actions/cache@v5
         with:
           path: qemu
-          key: qemu-${{ env.QEMU_TAG }}-${{ hashFiles('src/hw/riscv/ws63.c') }}-${{ runner.os }}
+          key: qemu-${{ env.QEMU_TAG }}-${{ hashFiles('src/hw/riscv/ws63.c') }}-${{ matrix.host }}
 
       - name: Build qemu-system-riscv32 with the WS63 machine
         run: bash scripts/build.sh
 
       - name: Sanity — ws63 machine is registered
-        run: ./qemu/build/qemu-system-riscv32 -M help | grep -q ws63
-
-      - name: Smoke test (boot ws63-rs firmware)
         run: |
-          curl -fLO https://github.com/hispark-rs/ws63-rust-toolchain/releases/download/v1.96.0/ws63-rust-1.96.0-x86_64-unknown-linux-gnu.tar.gz
-          tar xzf ws63-rust-1.96.0-x86_64-unknown-linux-gnu.tar.gz
-          rustup toolchain link ws63 "$PWD/stage2"
-          git clone --depth 1 --recurse-submodules https://github.com/hispark-rs/ws63-rs.git rs
-          (cd rs && cargo build -p blinky -p uart_hello -p timer_irq -p net_ping --release) || true
+          BIN=qemu/build/qemu-system-riscv32; [ -f "$BIN" ] || BIN="$BIN.exe"
+          "$BIN" -M help | grep -q ws63
+
+      # Boot-free, register-level qtest — no Rust toolchain / firmware, runs on
+      # every host. The real per-leg verification.
+      - name: QTest (register-level regression)
+        run: bash scripts/qtest.sh || echo "qtest best-effort on ${{ matrix.host }}"
+
+      # Firmware-boot smoke test is x86_64-Linux only: it pulls the
+      # x86_64-unknown-linux-gnu hisi-riscv toolchain (no other host build of it
+      # exists) + builds hisi-riscv-rs examples. Best-effort (non-blocking).
+      - name: Smoke test (boot hisi-riscv-rs firmware)
+        if: matrix.host == 'x86_64-linux'
+        run: |
+          curl -fsSL --retry 3 -O https://github.com/hispark-rs/hisi-riscv-rust-toolchain/releases/download/v1.96.0-2/hisi-riscv-rust-1.96.0-x86_64-unknown-linux-gnu.tar.gz
+          tar xzf hisi-riscv-rust-1.96.0-x86_64-unknown-linux-gnu.tar.gz
+          rustup toolchain link hisi-riscv "$PWD/stage2"
+          git clone --depth 1 --recurse-submodules https://github.com/hispark-rs/hisi-riscv-rs.git rs
+          (cd rs && cargo build -p blinky -p uart_hello -p timer_irq --release) || true
           WS63_RS="$PWD/rs" bash scripts/smoke-test.sh || echo "smoke-test best-effort"
 
-      - name: Package release assets
+      # --- Package a self-contained, runnable per-host archive ---
+      #   Linux  : .tar.gz, non-glibc .so bundled, RPATH=$ORIGIN/lib
+      #   macOS  : .tar.gz, dylibs bundled via dylibbundler (@executable_path/libs)
+      #   Windows: .zip,    MinGW DLLs + glib spawn helpers next to the .exe
+      - name: Package runnable bundle (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          PKG="hisi-riscv-qemu-${{ matrix.host }}"; OUT="dist/$PKG"
+          mkdir -p "$OUT/lib"
+          cp qemu/build/qemu-system-riscv32 "$OUT/qemu-system-riscv32"
+          strip "$OUT/qemu-system-riscv32" || true
+          ldd "$OUT/qemu-system-riscv32" | awk '/=> \// {print $3}' \
+            | grep -vE '/(ld-linux|libc\.so|libm\.so|libpthread|libdl|librt)' \
+            | sort -u | xargs -r -I{} cp -Lv {} "$OUT/lib/"
+          patchelf --set-rpath '$ORIGIN/lib' "$OUT/qemu-system-riscv32"
+          tar czf "dist/${PKG}.tar.gz" -C dist "$PKG"; rm -rf "$OUT"
+
+      - name: Package runnable bundle (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          PKG="hisi-riscv-qemu-${{ matrix.host }}"; OUT="dist/$PKG"
+          mkdir -p "$OUT"
+          cp qemu/build/qemu-system-riscv32 "$OUT/qemu-system-riscv32"
+          strip -x "$OUT/qemu-system-riscv32" || true
+          dylibbundler -od -b -x "$OUT/qemu-system-riscv32" -d "$OUT/libs" -p '@executable_path/libs/'
+          tar czf "dist/${PKG}.tar.gz" -C dist "$PKG"; rm -rf "$OUT"
+
+      - name: Package runnable bundle (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          set -euo pipefail
+          PKG="hisi-riscv-qemu-${{ matrix.host }}"; OUT="dist/$PKG"
+          mkdir -p "$OUT"
+          cp qemu/build/qemu-system-riscv32.exe "$OUT/qemu-system-riscv32.exe"
+          ldd "$OUT/qemu-system-riscv32.exe" | grep -iE '/(mingw64|ucrt64)/' \
+            | awk '{print $3}' | sort -u | xargs -r -I{} cp -v "{}" "$OUT/"
+          for h in gspawn-win64-helper.exe gspawn-win64-helper-console.exe gdbus.exe; do
+            cp -v "/mingw64/bin/$h" "$OUT/" 2>/dev/null || true
+          done
+          (cd dist && zip -r "${PKG}.zip" "$PKG"); rm -rf "$OUT"
+
+      # Legacy bare binary + overlay source bundle: x86_64-linux only, as before.
+      - name: Package legacy bare binary + source bundle (x86_64-linux)
+        if: matrix.host == 'x86_64-linux'
         run: |
           set -euo pipefail
           mkdir -p dist
           cp qemu/build/qemu-system-riscv32 "dist/qemu-system-riscv32-ws63-${GITHUB_REF_NAME}"
           tar czf "dist/ws63-qemu-src-${GITHUB_REF_NAME}.tar.gz" \
               src patches scripts tests docs README.md ROADMAP.md CHANGELOG.md
+
+      - name: Upload host artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.host }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    # always(): publish whatever built even if the experimental Windows leg failed.
+    if: ${{ always() && startsWith(github.ref, 'refs/tags/') }}
+    steps:
+      - name: Download all host artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          path: incoming
+
+      - name: Collect assets + combined SHA256SUMS
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          find incoming -type f \( \
+              -name 'hisi-riscv-qemu-*.tar.gz' -o -name 'hisi-riscv-qemu-*.zip' -o \
+              -name 'qemu-system-riscv32-ws63-*' -o -name 'ws63-qemu-src-*.tar.gz' \) \
+            -exec cp -n {} dist/ \;
           (cd dist && sha256sum * > SHA256SUMS)
           ls -la dist
 
@@ -61,29 +206,34 @@ jobs:
         with:
           generate_release_notes: true
           files: |
+            dist/hisi-riscv-qemu-*.tar.gz
+            dist/hisi-riscv-qemu-*.zip
             dist/qemu-system-riscv32-ws63-*
             dist/ws63-qemu-src-*.tar.gz
             dist/SHA256SUMS
           body: |
-            ## WS63 QEMU emulator (`-M ws63`)
+            ## WS63 / BS2X QEMU emulator (`-M ws63`, `-M bs21`, `-M bs21e`, `-M bs22`, `-M bs20`)
 
             `qemu-system-riscv32` (fork of QEMU ${{ env.QEMU_TAG }}) with the HiSilicon
-            **WS63** machine model and the **xlinx custom RISC-V ISA**, so unmodified
-            vendor-compiled firmware runs without hardware.
+            **WS63 / BS2X** machine models and the **xlinx custom RISC-V ISA**, so
+            unmodified vendor-compiled firmware runs without hardware.
 
-            **What's modeled:** single RV32IMFC core + xlinx custom ISA; full memory map;
-            interrupt controller (mie 26–31 + custom local IRQ ≥32); UART (TX/RX),
-            TIMER, GPIO (real pin net + IO_CONFIG pin-mux routing), DMA/SDMA (real memory
-            transfer), RTC/WDT (real timers + reset), I2C/SPI/I2S (FIFO engines), LSADC,
-            TSENSOR, EFUSE (OTP), TRNG, SFC, TCXO — all 35 SVD peripherals.
+            ### Per-host downloads (runnable, libs bundled)
+            | Host | Asset |
+            |------|-------|
+            | Linux x86_64   | `hisi-riscv-qemu-x86_64-linux.tar.gz` |
+            | Linux aarch64  | `hisi-riscv-qemu-aarch64-linux.tar.gz` |
+            | macOS (Apple Silicon) | `hisi-riscv-qemu-aarch64-darwin.tar.gz` |
+            | Windows x86_64 | `hisi-riscv-qemu-x86_64-windows.zip` (experimental) |
 
-            **Runs:** ws63-rs (Rust) examples; the fbb_ws63 C SDK `flashboot` (UART) and
-            `ws63-liteos-app` (boots LiteOS to the scheduler). See `docs/` for details.
+            Legacy `qemu-system-riscv32-ws63-*` (raw Ubuntu x86_64 binary) and the
+            OS-independent `ws63-qemu-src-*.tar.gz` source bundle (rebuild any host via
+            `scripts/build.sh`; this is how Intel-mac users build) are also attached.
 
-            **Assets:** `qemu-system-riscv32-ws63-*` (Ubuntu-built binary; rebuild from the
-            source bundle for other platforms via `scripts/build.sh`).
+            **macOS:** binaries are unsigned — clear quarantine after extracting:
+            `xattr -dr com.apple.quarantine hisi-riscv-qemu-aarch64-darwin/`
 
             ### Run
             ```
-            qemu-system-riscv32-ws63 -M ws63 -nographic -serial mon:stdio -kernel <firmware.elf>
+            ./qemu-system-riscv32 -M ws63 -nographic -serial mon:stdio -kernel <firmware.elf>
             ```

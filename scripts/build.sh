@@ -18,7 +18,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 QEMU_TAG="${QEMU_TAG:-v10.0.0}"
 QEMU_REPO="${QEMU_REPO:-https://gitlab.com/qemu-project/qemu.git}"
 QEMU_DIR="${QEMU_DIR:-$HERE/qemu}"
-JOBS="${JOBS:-$(nproc)}"
+JOBS="${JOBS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)}"
 
 # The patch-series is maintained per QEMU version under patches/<QEMU_TAG>/ (the
 # edits to existing QEMU files drift between releases). Pick the dir for this tag;
@@ -87,6 +87,8 @@ echo "==> building qemu-system-riscv32 (-j$JOBS)"
 echo "==> building tests/qtest/ws63-test (-j$JOBS)"
 (cd "$QEMU_DIR/build" && ninja -j"$JOBS" tests/qtest/ws63-test)
 
+# Build output is qemu-system-riscv32 everywhere except Windows/MINGW (.exe).
 BIN="$QEMU_DIR/build/qemu-system-riscv32"
+[ -f "$BIN" ] || BIN="$BIN.exe"
 echo "==> done: $BIN"
 "$BIN" -M help 2>/dev/null | grep -i ws63 || true
