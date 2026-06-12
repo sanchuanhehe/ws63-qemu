@@ -26,7 +26,7 @@ Targets QEMU v10.0.x.
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
 ---
  target/riscv/cpu-qom.h    |   1 +
- target/riscv/cpu.c        |  39 ++++
+ target/riscv/cpu.c        |  49 ++++
  target/riscv/cpu.h        |  14 ++
  target/riscv/cpu_helper.c | 412 +++++++++++++++++++++++++++++++++++++-
  target/riscv/translate.c  |  31 ++-
@@ -45,10 +45,10 @@ index 4cfdb74..c8f569e 100644
  #define TYPE_RISCV_CPU_VEYRON_V1        RISCV_CPU_TYPE_NAME("veyron-v1")
  #define TYPE_RISCV_CPU_TT_ASCALON       RISCV_CPU_TYPE_NAME("tt-ascalon")
 diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
-index 09ded68..4855ab2 100644
+index 09ded68..c2845be 100644
 --- a/target/riscv/cpu.c
 +++ b/target/riscv/cpu.c
-@@ -819,6 +819,42 @@ static void rv32_imafcu_nommu_cpu_init(Object *obj)
+@@ -819,6 +819,43 @@ static void rv32_imafcu_nommu_cpu_init(Object *obj)
      cpu->cfg.pmp = true;
  }
  
@@ -79,8 +79,9 @@ index 09ded68..4855ab2 100644
 +    cpu->cfg.ext_zifencei = true;
 +    cpu->cfg.ext_zicntr = true;
 +    cpu->cfg.ext_zcf = true;
-+    /* riscv31 implements the bit-manip extensions; LiteOS's scheduler
-+     * (OsGetTopTask) uses clz (Zbb) to pick the top ready priority. */
++    /* The HiSilicon riscv31 core implements the bit-manipulation extensions;
++     * LiteOS's scheduler (OsGetTopTask) uses `clz` (Zbb) to pick the highest
++     * ready priority. Without these the vendor firmware traps illegal-insn. */
 +    cpu->cfg.ext_zba = true;
 +    cpu->cfg.ext_zbb = true;
 +    cpu->cfg.ext_zbc = true;
@@ -91,7 +92,26 @@ index 09ded68..4855ab2 100644
  static void rv32i_bare_cpu_init(Object *obj)
  {
      CPURISCVState *env = &RISCV_CPU(obj)->env;
-@@ -1044,6 +1074,14 @@ static void riscv_cpu_reset_hold(Object *obj, ResetType type)
+@@ -1017,7 +1054,17 @@ bool riscv_cpu_has_work(CPUState *cs)
+      */
+     return riscv_cpu_all_pending(env) != 0 ||
+         riscv_cpu_sirq_pending(env) != RISCV_EXCP_NONE ||
+-        riscv_cpu_vsirq_pending(env) != RISCV_EXCP_NONE;
++        riscv_cpu_vsirq_pending(env) != RISCV_EXCP_NONE ||
++        /*
++         * HiSilicon WS63/BS2X custom local interrupts (IRQ >= 32, LOCIEN/LOCIPD):
++         * an enabled+pending LOCI must wake WFI, otherwise an idle (WFI-parked)
++         * hart never takes a LOCI-delivered interrupt. WS63's own IRQs in 26-31
++         * ride mip and are covered by riscv_cpu_all_pending() above, so this only
++         * matters for true LOCI sources (e.g. BS2X TIMER_0 = 53). Respects the
++         * individual LOCIEN enable, ignoring mstatus.MIE, per WFI semantics.
++         */
++        (env->ws63_locipd[0] & env->ws63_locien[0]) != 0 ||
++        (env->ws63_locipd[1] & env->ws63_locien[1]) != 0;
+ }
+ #endif /* !CONFIG_USER_ONLY */
+ 
+@@ -1044,6 +1091,14 @@ static void riscv_cpu_reset_hold(Object *obj, ResetType type)
      env->misa_mxl = mcc->misa_mxl_max;
      env->priv = PRV_M;
      env->mstatus &= ~(MSTATUS_MIE | MSTATUS_MPRV);
@@ -106,7 +126,7 @@ index 09ded68..4855ab2 100644
      if (env->misa_mxl > MXL_RV32) {
          /*
           * The reset status of SXL/UXL is undefined, but mstatus is WARL
-@@ -3243,6 +3281,7 @@ static const TypeInfo riscv_cpu_type_infos[] = {
+@@ -3243,6 +3298,7 @@ static const TypeInfo riscv_cpu_type_infos[] = {
      DEFINE_VENDOR_CPU(TYPE_RISCV_CPU_SIFIVE_E31, MXL_RV32,  rv32_sifive_e_cpu_init),
      DEFINE_VENDOR_CPU(TYPE_RISCV_CPU_SIFIVE_E34, MXL_RV32,  rv32_imafcu_nommu_cpu_init),
      DEFINE_VENDOR_CPU(TYPE_RISCV_CPU_SIFIVE_U34, MXL_RV32,  rv32_sifive_u_cpu_init),
