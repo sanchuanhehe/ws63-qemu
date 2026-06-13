@@ -86,12 +86,18 @@ fi
 #    generation), so drive ninja directly there — it builds the same target.
 echo "==> building qemu-system-riscv32 (-j$JOBS)"
 case "$(uname -s)" in
-  # On Windows the ninja target carries the .exe suffix.
-  MINGW*|MSYS*|CYGWIN*) (cd "$QEMU_DIR/build" && ninja -j"$JOBS" qemu-system-riscv32.exe) ;;
-  *)                    (cd "$QEMU_DIR" && make -j"$JOBS" qemu-system-riscv32) ;;
+  # On Windows the ninja target carries the .exe suffix, and the `make` wrapper's
+  # mtest2make.py step chokes — drive ninja directly. The qtest is a dev-only
+  # binary (never packaged in the release), so skip it on Windows: its meson
+  # target name doesn't resolve cleanly under MSYS2 and it adds nothing to the
+  # shipped emulator.
+  MINGW*|MSYS*|CYGWIN*)
+    (cd "$QEMU_DIR/build" && ninja -j"$JOBS" qemu-system-riscv32.exe) ;;
+  *)
+    (cd "$QEMU_DIR" && make -j"$JOBS" qemu-system-riscv32)
+    echo "==> building tests/qtest/ws63-test (-j$JOBS)"
+    (cd "$QEMU_DIR/build" && ninja -j"$JOBS" tests/qtest/ws63-test) ;;
 esac
-echo "==> building tests/qtest/ws63-test (-j$JOBS)"
-(cd "$QEMU_DIR/build" && ninja -j"$JOBS" tests/qtest/ws63-test)
 
 # Build output is qemu-system-riscv32 everywhere except Windows/MINGW (.exe).
 BIN="$QEMU_DIR/build/qemu-system-riscv32"
