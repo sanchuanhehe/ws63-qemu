@@ -86,7 +86,8 @@ fi
 #    generation), so drive ninja directly there — it builds the same target.
 echo "==> building qemu-system-riscv32 (-j$JOBS)"
 case "$(uname -s)" in
-  MINGW*|MSYS*|CYGWIN*) (cd "$QEMU_DIR/build" && ninja -j"$JOBS" qemu-system-riscv32) ;;
+  # On Windows the ninja target carries the .exe suffix.
+  MINGW*|MSYS*|CYGWIN*) (cd "$QEMU_DIR/build" && ninja -j"$JOBS" qemu-system-riscv32.exe) ;;
   *)                    (cd "$QEMU_DIR" && make -j"$JOBS" qemu-system-riscv32) ;;
 esac
 echo "==> building tests/qtest/ws63-test (-j$JOBS)"
