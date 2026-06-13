@@ -82,8 +82,13 @@ fi
 
 # 6. build the emulator, then the WS63 qtest binary (ninja picks up the
 #    meson.build edit above and regenerates before building the target).
+#    On Windows/MSYS2 the `make` wrapper's mtest2make.py step chokes (test-Makefile
+#    generation), so drive ninja directly there — it builds the same target.
 echo "==> building qemu-system-riscv32 (-j$JOBS)"
-(cd "$QEMU_DIR" && make -j"$JOBS" qemu-system-riscv32)
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) (cd "$QEMU_DIR/build" && ninja -j"$JOBS" qemu-system-riscv32) ;;
+  *)                    (cd "$QEMU_DIR" && make -j"$JOBS" qemu-system-riscv32) ;;
+esac
 echo "==> building tests/qtest/ws63-test (-j$JOBS)"
 (cd "$QEMU_DIR/build" && ninja -j"$JOBS" tests/qtest/ws63-test)
 
